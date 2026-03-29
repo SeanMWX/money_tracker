@@ -155,6 +155,7 @@ def main() -> int:
 
     report_payload = run_command(db_path, "month-report", "--month", "2026-03")
     expect(report_payload["expense_total"] == "10.00", "month-report expense_total mismatch")
+    expect(report_payload["totals_by_currency"][0]["currency"] == "CNY", "month-report currency summary mismatch")
     expect(report_payload["top_expense_account"]["account"] == ACCOUNT_ALIPAY_CNY, "month-report wallet breakdown mismatch")
 
     day_payload = run_command(db_path, "day-report", "--date", "2026-03-15")

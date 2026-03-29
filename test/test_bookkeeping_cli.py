@@ -519,7 +519,7 @@ class TestBookkeepingCli(CliTestCase):
         labels = [item["label"] for item in payload["accounts"]]
         self.assertNotIn("PayPal (USD)", labels)
 
-    def test_reports_mix_currencies_without_conversion(self) -> None:
+    def test_reports_split_totals_by_currency_for_mixed_currency_periods(self) -> None:
         self.run_cli("set-categories", "--replace", "daily", "salary")
         self.run_cli("set-accounts", "--replace", "\u652f\u4ed8\u5b9d", "\u94f6\u884c\u5361:USD", "Revolut:EUR")
 
@@ -578,16 +578,31 @@ class TestBookkeepingCli(CliTestCase):
         code, payload, _ = self.run_cli("month-report", "--month", "2026-03")
         self.assertEqual(code, 0)
         self.assert_ok(payload, "month-report")
-        self.assertEqual(payload["expense_total"], "30.00")
-        self.assertEqual(payload["income_total"], "30.00")
-        self.assertEqual(payload["net_total"], "0.00")
+        self.assertTrue(payload["has_mixed_currencies"])
+        self.assertEqual(payload["currencies"], ["CNY", "EUR", "USD"])
+        self.assertIsNone(payload["expense_total"])
+        self.assertIsNone(payload["income_total"])
+        self.assertIsNone(payload["net_total"])
+        totals = {item["currency"]: item for item in payload["totals_by_currency"]}
+        self.assertEqual(totals["CNY"]["expense_total"], "10.00")
+        self.assertEqual(totals["CNY"]["income_total"], "0.00")
+        self.assertEqual(totals["CNY"]["net_total"], "-10.00")
+        self.assertEqual(totals["USD"]["expense_total"], "20.00")
+        self.assertEqual(totals["USD"]["income_total"], "0.00")
+        self.assertEqual(totals["USD"]["net_total"], "-20.00")
+        self.assertEqual(totals["EUR"]["expense_total"], "0.00")
+        self.assertEqual(totals["EUR"]["income_total"], "30.00")
+        self.assertEqual(totals["EUR"]["net_total"], "30.00")
         self.assertEqual(payload["top_expense_account"]["account"], ACCOUNT_BANK_USD)
         self.assertEqual(payload["top_income_account"]["account"], ACCOUNT_REVOLUT_EUR)
         self.assertEqual(
             [item["account"] for item in payload["expense_by_account"]],
             [ACCOUNT_BANK_USD, ACCOUNT_ALIPAY_CNY],
         )
-        self.assertNotIn("totals_by_currency", payload)
+        self.assertEqual(
+            [(item["category"], item["currency"]) for item in payload["expense_by_category"]],
+            [("daily", "USD"), ("daily", "CNY")],
+        )
 
     def test_reports_cover_day_week_month_and_year(self) -> None:
         self.seed_cny_entries()

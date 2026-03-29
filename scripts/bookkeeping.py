@@ -996,17 +996,39 @@ def summarize_totals_by_currency(rows):
     return payload
 
 
+def summarize_report_totals_by_currency(rows):
+    payload = []
+    for row in rows:
+        net_total_cents = row["income_total_cents"] - row["expense_total_cents"]
+        payload.append(
+            {
+                "currency": row["currency"],
+                "income_total": cents_to_amount(row["income_total_cents"]),
+                "income_total_cents": row["income_total_cents"],
+                "expense_total": cents_to_amount(row["expense_total_cents"]),
+                "expense_total_cents": row["expense_total_cents"],
+                "net_total": cents_to_amount(net_total_cents),
+                "net_total_cents": net_total_cents,
+                "entry_count": row["entry_count"],
+                "income_entry_count": row["income_entry_count"],
+                "expense_entry_count": row["expense_entry_count"],
+            }
+        )
+    return payload
+
+
 def get_breakdown(conn, start_date, end_date, entry_type, snapshot_column, label_key):
     rows = conn.execute(
         f"""
         SELECT
             {snapshot_column} AS label,
+            currency,
             SUM(amount_cents) AS total_cents,
             COUNT(*) AS entry_count
         FROM entries
         WHERE occurred_on >= ? AND occurred_on < ? AND entry_type = ?
-        GROUP BY {snapshot_column}
-        ORDER BY total_cents DESC, {snapshot_column} ASC
+        GROUP BY {snapshot_column}, currency
+        ORDER BY total_cents DESC, {snapshot_column} ASC, currency ASC
         """,
         (start_date, end_date, entry_type),
     ).fetchall()
@@ -1015,6 +1037,7 @@ def get_breakdown(conn, start_date, end_date, entry_type, snapshot_column, label
         breakdown.append(
             {
                 label_key: row["label"],
+                "currency": row["currency"],
                 "total": cents_to_amount(row["total_cents"]),
                 "total_cents": row["total_cents"],
                 "entry_count": row["entry_count"],
@@ -1024,40 +1047,72 @@ def get_breakdown(conn, start_date, end_date, entry_type, snapshot_column, label
 
 
 def collect_report_payload(conn, start_date, end_date):
-    totals = {"expense": {"total_cents": 0, "entry_count": 0}, "income": {"total_cents": 0, "entry_count": 0}}
+    totals_by_currency = {}
     for row in conn.execute(
         """
-        SELECT entry_type, COALESCE(SUM(amount_cents), 0) AS total_cents, COUNT(*) AS entry_count
+        SELECT currency, entry_type, COALESCE(SUM(amount_cents), 0) AS total_cents, COUNT(*) AS entry_count
         FROM entries
         WHERE occurred_on >= ? AND occurred_on < ?
-        GROUP BY entry_type
+        GROUP BY currency, entry_type
         """,
         (start_date, end_date),
     ):
-        totals[row["entry_type"]] = {
-            "total_cents": row["total_cents"],
-            "entry_count": row["entry_count"],
-        }
+        currency_totals = totals_by_currency.setdefault(
+            row["currency"],
+            {
+                "currency": row["currency"],
+                "income_total_cents": 0,
+                "expense_total_cents": 0,
+                "income_entry_count": 0,
+                "expense_entry_count": 0,
+                "entry_count": 0,
+            },
+        )
+        if row["entry_type"] == "income":
+            currency_totals["income_total_cents"] = row["total_cents"]
+            currency_totals["income_entry_count"] = row["entry_count"]
+        else:
+            currency_totals["expense_total_cents"] = row["total_cents"]
+            currency_totals["expense_entry_count"] = row["entry_count"]
+        currency_totals["entry_count"] += row["entry_count"]
 
     expense_breakdown = get_breakdown(conn, start_date, end_date, "expense", "category_name_snapshot", "category")
     income_breakdown = get_breakdown(conn, start_date, end_date, "income", "category_name_snapshot", "category")
     expense_account_breakdown = get_breakdown(conn, start_date, end_date, "expense", "account_name_snapshot", "account")
     income_account_breakdown = get_breakdown(conn, start_date, end_date, "income", "account_name_snapshot", "account")
 
-    expense_total_cents = totals["expense"]["total_cents"]
-    income_total_cents = totals["income"]["total_cents"]
-    net_total_cents = income_total_cents - expense_total_cents
+    currencies = sorted(totals_by_currency.keys())
+    mixed_currencies = len(currencies) > 1
+    totals_payload = summarize_report_totals_by_currency([totals_by_currency[currency] for currency in currencies])
+
+    if len(currencies) == 1:
+        total_row = totals_by_currency[currencies[0]]
+        expense_total_cents = total_row["expense_total_cents"]
+        income_total_cents = total_row["income_total_cents"]
+        net_total_cents = income_total_cents - expense_total_cents
+    elif len(currencies) == 0:
+        expense_total_cents = 0
+        income_total_cents = 0
+        net_total_cents = 0
+    else:
+        expense_total_cents = None
+        income_total_cents = None
+        net_total_cents = None
 
     return {
-        "expense_total": cents_to_amount(expense_total_cents),
+        "expense_total": cents_to_amount(expense_total_cents) if expense_total_cents is not None else None,
         "expense_total_cents": expense_total_cents,
-        "income_total": cents_to_amount(income_total_cents),
+        "income_total": cents_to_amount(income_total_cents) if income_total_cents is not None else None,
         "income_total_cents": income_total_cents,
-        "net_total": cents_to_amount(net_total_cents),
+        "net_total": cents_to_amount(net_total_cents) if net_total_cents is not None else None,
         "net_total_cents": net_total_cents,
-        "entry_count": totals["expense"]["entry_count"] + totals["income"]["entry_count"],
-        "expense_entry_count": totals["expense"]["entry_count"],
-        "income_entry_count": totals["income"]["entry_count"],
+        "entry_count": sum(row["entry_count"] for row in totals_by_currency.values()),
+        "expense_entry_count": sum(row["expense_entry_count"] for row in totals_by_currency.values()),
+        "income_entry_count": sum(row["income_entry_count"] for row in totals_by_currency.values()),
+        "display_currency": currencies[0] if len(currencies) == 1 else None,
+        "currencies": currencies,
+        "has_mixed_currencies": mixed_currencies,
+        "totals_by_currency": totals_payload,
         "expense_by_category": expense_breakdown,
         "income_by_category": income_breakdown,
         "expense_by_account": expense_account_breakdown,

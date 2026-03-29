@@ -201,6 +201,8 @@ Key output fields:
 - `expense_total`
 - `income_total`
 - `net_total`
+- `totals_by_currency`
+- `has_mixed_currencies`
 - `expense_by_category`
 - `income_by_category`
 - `expense_by_account`
@@ -211,7 +213,7 @@ Key output fields:
 - `top_income_account`
 - `entry_count`
 
-These report commands return raw stored amounts. They do not add `totals_by_currency` and they do not convert between currencies.
+These report commands do not convert between currencies. When a selected period contains multiple currencies, read `totals_by_currency` and do not treat the top-level unified totals as a converted amount.
 
 ### List transactions for one date, ISO week, month, or year
 
@@ -299,6 +301,6 @@ When a user says `记账 <prompt>`:
   - end: exclusive end date for the next day, next ISO week, next month, or next year
 - Category reports group by the saved category snapshot so historical entries remain readable even if the active category list changes later.
 - Account reports group by the saved wallet snapshot, including currency, so historical entries remain readable even if the active wallet list changes later.
-- Period report totals are raw stored amounts. A mixed-currency month such as `10 CNY + 20 USD` is reported as `30.00`, not as a converted value.
+- Period report totals are currency-aware. A mixed-currency month exposes `totals_by_currency` such as `CNY: 10.00` and `USD: 20.00` instead of pretending they are one converted total.
 - `update-account` rewrites the linked entry and recurring snapshots, plus their currencies, to match the updated wallet definition.
 - Recurring transactions are stored as schedules; they do not auto-create normal entries unless the caller decides to record them separately.

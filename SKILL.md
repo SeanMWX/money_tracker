@@ -21,7 +21,7 @@ Interpret the user's Chinese prompt, map it to a structured record or query, and
 - Default database path: `~/.money_tracker/bookkeeping.db`
 - Allow override with `--db` or the `MONEY_TRACKER_DB` environment variable.
 - The bundled script also accepts the legacy `LOCAL_BOOKKEEPING_DB` environment variable and can fall back to the legacy `~/.local-bookkeeping/bookkeeping.db` path when needed.
-- Day, week, month, and year report commands do not perform FX conversion; mixed-currency periods are reported as raw stored amounts.
+- Day, week, month, and year report commands do not perform FX conversion; mixed-currency periods return `totals_by_currency`, and the top-level unified totals are left empty.
 - For extra Chinese prompt examples, load `{baseDir}/references/chat_reference.md` only when needed.
 
 ## Intent Routing
@@ -164,11 +164,12 @@ For day, week, month, or year totals or analysis:
    - `expense_total` for total spending
    - `income_total` for total income
    - `net_total` for net cash flow
+   - `totals_by_currency` for per-currency totals when the period contains multiple currencies
    - `expense_by_category` for where spending is concentrated
    - `top_expense_category` for the largest spending category
    - `expense_by_account` for which account handled the spending
    - `top_expense_account` for the most-used spending account in the selected period
-4. If the selected period contains more than one currency, explicitly say the totals are raw stored amounts and no FX conversion was applied.
+4. If the selected period contains more than one currency, read from `totals_by_currency` and explicitly say no FX conversion was applied.
 5. For "how much money do I have now by currency" questions, do not use these period report commands; use `account-balances` instead.
 
 Example prompts:
@@ -284,6 +285,6 @@ Main commands:
 - When recording an entry, mention the exact date used.
 - When answering an account balance query, mention both the wallet balances and the grouped totals by currency when relevant.
 - When answering a day, week, month, or year query, mention the exact period used.
-- When a report period contains more than one currency, say plainly that the totals are raw amounts and no FX conversion was applied.
+- When a report period contains more than one currency, answer from `totals_by_currency` and say plainly that no FX conversion was applied.
 - If the script reports an unmatched category or unmatched account, say so plainly and suggest updating the active sets if needed.
 - If the database is empty for the requested period, state that directly.

@@ -54,7 +54,7 @@ Optional local helper directories such as `skill-creator/` may exist during main
 
 - Use `account-balances` for current holdings by wallet and by currency.
 - Wallet balances are grouped by saved wallet definitions such as `支付宝:CNY` or `银行卡:EUR`.
-- Day, week, month, and year report commands do not perform FX conversion. If one period contains multiple currencies, the totals are raw stored amounts and must not be interpreted as converted totals.
+- Day, week, month, and year reports never perform FX conversion. If one period contains multiple currencies, use `totals_by_currency`; the top-level `expense_total`, `income_total`, and `net_total` are left empty instead of pretending to be one currency.
 - Recurring transactions are stored as schedules only. They do not automatically create normal transaction entries.
 
 ## Install In OpenClaw

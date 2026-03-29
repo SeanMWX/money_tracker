@@ -20,9 +20,9 @@ It is a routing summary, not a replacement for `SKILL.md` or `commands.md`.
 | `显示所有账户余额` | Show current holdings by wallet and currency | `account-balances` | Returns per-wallet balances plus `totals_by_currency` |
 | `我现在还有多少美元` | Show current holdings for one currency | `account-balances --currency USD` | Returns active USD wallet balances and grouped USD totals |
 | `今天花了多少` | Day total report | `day-report --date YYYY-MM-DD` | Returns expense, income, net, breakdowns, and top category/account for that date |
-| `这周花了多少` | ISO week report | `week-report --week YYYY-Www` or `week-report --date YYYY-MM-DD` | Returns weekly totals and breakdowns |
-| `这个月花了多少` | Month report | `month-report --month YYYY-MM` | Returns monthly totals and breakdowns |
-| `今年收入主要来自哪里` | Year report or analysis | `year-report --year YYYY` | Returns yearly totals, income/expense breakdowns, and top categories/accounts |
+| `这周花了多少` | ISO week report | `week-report --week YYYY-Www` or `week-report --date YYYY-MM-DD` | Returns weekly totals and breakdowns; mixed-currency periods should be read from `totals_by_currency` |
+| `这个月花了多少` | Month report | `month-report --month YYYY-MM` | Returns monthly totals and breakdowns; mixed-currency periods should be read from `totals_by_currency` |
+| `今年收入主要来自哪里` | Year report or analysis | `year-report --year YYYY` | Returns yearly totals, income/expense breakdowns, and top categories/accounts; mixed-currency periods should be read from `totals_by_currency` |
 | `列出 2026-03-15 的账单` | Day detail query | `list-transactions --date 2026-03-15` | Returns entry list for that date |
 | `列出这周的账单` | Week detail query | `list-transactions --week YYYY-Www` | Returns entry list for that ISO week |
 | `列出这个月的账单` | Month detail query | `list-transactions --month YYYY-MM` | Returns entry list for that month |
@@ -48,7 +48,7 @@ It is a routing summary, not a replacement for `SKILL.md` or `commands.md`.
 | User omits the category while recording | The skill may save the entry under `未分类` if it cannot safely match an active category |
 | User names an inactive or unknown wallet with strict validation | `--strict-account` should fail instead of silently guessing |
 | User names an inactive or unknown category with strict validation | `--strict-category` should fail instead of silently guessing |
-| One report period contains multiple currencies | Day/week/month/year report totals are raw stored amounts and do not apply FX conversion |
+| One report period contains multiple currencies | Day/week/month/year reports must be read from `totals_by_currency`; do not collapse them into one converted amount |
 | User wants recurring schedules to become normal entries automatically | Not implemented; recurring items are schedules only |
 
 ## Useful Examples
