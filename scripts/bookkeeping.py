@@ -9,7 +9,7 @@ import os
 import sqlite3
 import sys
 from contextlib import closing
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
@@ -20,6 +20,31 @@ DEFAULT_DB_DIR = ".money_tracker"
 LEGACY_DB_DIR = ".local-bookkeeping"
 DEFAULT_DB_NAME = "bookkeeping.db"
 DEFAULT_UNCATEGORIZED = "\u672a\u5206\u7c7b"
+DEFAULT_UNSPECIFIED_ACCOUNT = "\u672a\u6307\u5b9a\u8d26\u6237"
+ACCOUNT_NAME_ALIASES = {
+    "cash": "\u73b0\u91d1",
+    "\u73b0\u91d1": "\u73b0\u91d1",
+    "alipay": "\u652f\u4ed8\u5b9d",
+    "\u652f\u4ed8\u5b9d": "\u652f\u4ed8\u5b9d",
+    "wechat": "\u5fae\u4fe1",
+    "weixin": "\u5fae\u4fe1",
+    "\u5fae\u4fe1": "\u5fae\u4fe1",
+    "bank_card": "\u94f6\u884c\u5361",
+    "bankcard": "\u94f6\u884c\u5361",
+    "\u94f6\u884c\u5361": "\u94f6\u884c\u5361",
+    "credit_card": "\u4fe1\u7528\u5361",
+    "creditcard": "\u4fe1\u7528\u5361",
+    "\u4fe1\u7528\u5361": "\u4fe1\u7528\u5361",
+}
+DEFAULT_ACCOUNT_NAMES = [
+    "\u73b0\u91d1",
+    "\u652f\u4ed8\u5b9d",
+    "\u5fae\u4fe1",
+    "\u94f6\u884c\u5361",
+    "\u4fe1\u7528\u5361",
+]
+ALLOWED_ACCOUNT_NAMES = set(DEFAULT_ACCOUNT_NAMES)
+RECURRING_FREQUENCIES = {"weekly", "monthly", "yearly"}
 
 
 def fail(message, exit_code=1, **extra):
@@ -69,6 +94,15 @@ def ensure_schema(conn):
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS entries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             entry_type TEXT NOT NULL CHECK (entry_type IN ('expense', 'income')),
@@ -76,6 +110,8 @@ def ensure_schema(conn):
             currency TEXT NOT NULL DEFAULT 'CNY',
             category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
             category_name_snapshot TEXT NOT NULL,
+            account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+            account_name_snapshot TEXT NOT NULL DEFAULT '未指定账户',
             description TEXT NOT NULL,
             note TEXT,
             occurred_on TEXT NOT NULL,
@@ -83,18 +119,90 @@ def ensure_schema(conn):
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS recurring_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entry_type TEXT NOT NULL CHECK (entry_type IN ('expense', 'income')),
+            amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+            currency TEXT NOT NULL DEFAULT 'CNY',
+            category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+            category_name_snapshot TEXT NOT NULL,
+            account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+            account_name_snapshot TEXT NOT NULL DEFAULT '未指定账户',
+            description TEXT NOT NULL,
+            note TEXT,
+            frequency TEXT NOT NULL CHECK (frequency IN ('weekly', 'monthly', 'yearly')),
+            interval_count INTEGER NOT NULL DEFAULT 1 CHECK (interval_count > 0),
+            next_due_on TEXT NOT NULL,
+            source_text TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_entries_occurred_on ON entries (occurred_on);
         CREATE INDEX IF NOT EXISTS idx_entries_type_date ON entries (entry_type, occurred_on);
         CREATE INDEX IF NOT EXISTS idx_entries_category_snapshot ON entries (category_name_snapshot);
+        CREATE INDEX IF NOT EXISTS idx_entries_account_snapshot ON entries (account_name_snapshot);
+        CREATE INDEX IF NOT EXISTS idx_recurring_next_due_on ON recurring_transactions (next_due_on);
+        CREATE INDEX IF NOT EXISTS idx_recurring_is_active ON recurring_transactions (is_active);
+        CREATE INDEX IF NOT EXISTS idx_recurring_category_snapshot ON recurring_transactions (category_name_snapshot);
+        CREATE INDEX IF NOT EXISTS idx_recurring_account_snapshot ON recurring_transactions (account_name_snapshot);
         """
     )
+    ensure_column_exists(
+        conn,
+        "entries",
+        "account_id",
+        "INTEGER REFERENCES accounts(id) ON DELETE SET NULL",
+    )
+    ensure_column_exists(
+        conn,
+        "entries",
+        "account_name_snapshot",
+        "TEXT NOT NULL DEFAULT '未指定账户'",
+    )
+    ensure_default_accounts(conn)
     conn.commit()
+
+
+def table_columns(conn, table_name):
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+
+
+def ensure_column_exists(conn, table_name, column_name, column_definition):
+    if column_name in table_columns(conn, table_name):
+        return
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
+
+
+def ensure_default_accounts(conn):
+    existing_count = conn.execute("SELECT COUNT(*) AS count FROM accounts").fetchone()["count"]
+    if existing_count:
+        return
+    now = utc_now()
+    for index, name in enumerate(DEFAULT_ACCOUNT_NAMES):
+        conn.execute(
+            """
+            INSERT INTO accounts (name, is_active, sort_order, created_at, updated_at)
+            VALUES (?, 1, ?, ?, ?)
+            """,
+            (name, index, now, now),
+        )
 
 
 def get_db_counts(conn):
     category_count = conn.execute("SELECT COUNT(*) AS count FROM categories WHERE is_active = 1").fetchone()["count"]
+    account_count = conn.execute("SELECT COUNT(*) AS count FROM accounts WHERE is_active = 1").fetchone()["count"]
     entry_count = conn.execute("SELECT COUNT(*) AS count FROM entries").fetchone()["count"]
-    return {"active_category_count": category_count, "entry_count": entry_count}
+    recurring_count = conn.execute("SELECT COUNT(*) AS count FROM recurring_transactions WHERE is_active = 1").fetchone()[
+        "count"
+    ]
+    return {
+        "active_category_count": category_count,
+        "active_account_count": account_count,
+        "entry_count": entry_count,
+        "active_recurring_transaction_count": recurring_count,
+    }
 
 
 def normalize_names(names):
@@ -110,6 +218,48 @@ def normalize_names(names):
     if not cleaned:
         fail("At least one non-empty category name is required.")
     return cleaned
+
+
+def normalize_account_name(raw_name, allow_default=True):
+    if raw_name is None:
+        return DEFAULT_UNSPECIFIED_ACCOUNT if allow_default else fail("Account name is required.")
+    candidate = raw_name.strip()
+    if not candidate:
+        return DEFAULT_UNSPECIFIED_ACCOUNT if allow_default else fail("Account name is required.")
+    if allow_default and candidate == DEFAULT_UNSPECIFIED_ACCOUNT:
+        return DEFAULT_UNSPECIFIED_ACCOUNT
+    normalized_key = candidate.lower().replace("-", "_").replace(" ", "_")
+    canonical = ACCOUNT_NAME_ALIASES.get(normalized_key)
+    if canonical:
+        return canonical
+    fail(
+        "Invalid account. Use one of the supported account names.",
+        provided_account=candidate,
+        allowed_accounts=DEFAULT_ACCOUNT_NAMES,
+    )
+
+
+def normalize_account_names(names):
+    cleaned = []
+    seen = set()
+    for raw_name in names:
+        canonical = normalize_account_name(raw_name, allow_default=False)
+        if canonical not in seen:
+            cleaned.append(canonical)
+            seen.add(canonical)
+    if not cleaned:
+        fail("At least one account name is required.")
+    return cleaned
+
+
+def parse_positive_int(raw_value, field_name):
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        fail(f"Invalid {field_name}.", provided=raw_value)
+    if value <= 0:
+        fail(f"{field_name.replace('_', ' ').capitalize()} must be greater than zero.", provided=raw_value)
+    return value
 
 
 def parse_amount_to_cents(raw_amount):
@@ -151,6 +301,42 @@ def normalize_month(raw_month):
     return f"{year:04d}-{month:02d}"
 
 
+def normalize_year(raw_year):
+    if not raw_year:
+        return f"{date.today().year:04d}"
+    try:
+        year = int(raw_year)
+    except ValueError:
+        fail("Invalid year. Expected YYYY.", provided=raw_year)
+    if year < 1:
+        fail("Invalid year. Expected YYYY.", provided=raw_year)
+    return f"{year:04d}"
+
+
+def normalize_week(raw_week):
+    if not raw_week:
+        today = date.today()
+        iso_year, iso_week, _ = today.isocalendar()
+        return f"{iso_year:04d}-W{iso_week:02d}"
+    if "-W" not in raw_week:
+        fail("Invalid week. Expected YYYY-Www.", provided=raw_week)
+    year_part, week_part = raw_week.split("-W", 1)
+    try:
+        year = int(year_part)
+        week = int(week_part)
+        date.fromisocalendar(year, week, 1)
+    except ValueError:
+        fail("Invalid week. Expected YYYY-Www.", provided=raw_week)
+    return f"{year:04d}-W{week:02d}"
+
+
+def day_bounds(date_value):
+    normalized = parse_iso_date(date_value).isoformat() if date_value else date.today().isoformat()
+    start = date.fromisoformat(normalized)
+    end = start + timedelta(days=1)
+    return normalized, start.isoformat(), end.isoformat()
+
+
 def month_bounds(month_value):
     normalized = normalize_month(month_value)
     year, month = (int(part) for part in normalized.split("-"))
@@ -160,6 +346,54 @@ def month_bounds(month_value):
     else:
         end = date(year, month + 1, 1)
     return normalized, start.isoformat(), end.isoformat()
+
+
+def week_bounds(week_value=None, date_value=None):
+    if week_value and date_value:
+        fail("Provide only one of --week or --date when selecting a week.", week=week_value, date=date_value)
+    if week_value:
+        normalized = normalize_week(week_value)
+        year_part, week_part = normalized.split("-W", 1)
+        start = date.fromisocalendar(int(year_part), int(week_part), 1)
+    else:
+        reference = parse_iso_date(date_value) if date_value else date.today()
+        iso_year, iso_week, _ = reference.isocalendar()
+        normalized = f"{iso_year:04d}-W{iso_week:02d}"
+        start = reference - timedelta(days=reference.weekday())
+    end = start + timedelta(days=7)
+    return normalized, start.isoformat(), end.isoformat()
+
+
+def year_bounds(year_value):
+    normalized = normalize_year(year_value)
+    year = int(normalized)
+    start = date(year, 1, 1)
+    end = date(year + 1, 1, 1)
+    return normalized, start.isoformat(), end.isoformat()
+
+
+def select_transaction_period(args):
+    if args.date:
+        period_type = "date"
+        period_value, start_date, end_date = day_bounds(args.date)
+    elif args.week:
+        period_type = "week"
+        period_value, start_date, end_date = week_bounds(week_value=args.week)
+    elif args.year:
+        period_type = "year"
+        period_value, start_date, end_date = year_bounds(args.year)
+    else:
+        period_type = "month"
+        period_value, start_date, end_date = month_bounds(args.month)
+    return period_type, period_value, start_date, end_date
+
+
+def build_period_metadata(period_type, period_value):
+    return {
+        "period_type": period_type,
+        "period_value": period_value,
+        period_type: period_value,
+    }
 
 
 def list_categories_rows(conn, include_inactive=False):
@@ -183,12 +417,50 @@ def active_category_names(conn):
     return [row["name"] for row in list_categories_rows(conn, include_inactive=False)]
 
 
+def list_accounts_rows(conn, include_inactive=False):
+    if include_inactive:
+        query = """
+            SELECT id, name, is_active, sort_order, created_at, updated_at
+            FROM accounts
+            ORDER BY sort_order ASC, id ASC
+        """
+        return conn.execute(query).fetchall()
+    query = """
+        SELECT id, name, is_active, sort_order, created_at, updated_at
+        FROM accounts
+        WHERE is_active = 1
+        ORDER BY sort_order ASC, id ASC
+    """
+    return conn.execute(query).fetchall()
+
+
+def active_account_names(conn):
+    return [row["name"] for row in list_accounts_rows(conn, include_inactive=False)]
+
+
 def resolve_category(conn, category_name):
     snapshot = category_name.strip() if category_name and category_name.strip() else DEFAULT_UNCATEGORIZED
     row = conn.execute(
         """
         SELECT id, name
         FROM categories
+        WHERE name = ? AND is_active = 1
+        """,
+        (snapshot,),
+    ).fetchone()
+    if row:
+        return row["id"], row["name"], True
+    return None, snapshot, False
+
+
+def resolve_account(conn, account_name):
+    snapshot = normalize_account_name(account_name, allow_default=True)
+    if snapshot == DEFAULT_UNSPECIFIED_ACCOUNT:
+        return None, snapshot, False
+    row = conn.execute(
+        """
+        SELECT id, name
+        FROM accounts
         WHERE name = ? AND is_active = 1
         """,
         (snapshot,),
@@ -209,6 +481,17 @@ def serialize_category_row(row):
     }
 
 
+def serialize_account_row(row):
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "is_active": bool(row["is_active"]),
+        "sort_order": row["sort_order"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
 def serialize_entry_row(row):
     return {
         "id": row["id"],
@@ -217,11 +500,33 @@ def serialize_entry_row(row):
         "amount_cents": row["amount_cents"],
         "currency": row["currency"],
         "category": row["category_name_snapshot"],
+        "account": row["account_name_snapshot"],
         "description": row["description"],
         "note": row["note"],
         "occurred_on": row["occurred_on"],
         "source_text": row["source_text"],
         "created_at": row["created_at"],
+    }
+
+
+def serialize_recurring_row(row):
+    return {
+        "id": row["id"],
+        "type": row["entry_type"],
+        "amount": cents_to_amount(row["amount_cents"]),
+        "amount_cents": row["amount_cents"],
+        "currency": row["currency"],
+        "category": row["category_name_snapshot"],
+        "account": row["account_name_snapshot"],
+        "description": row["description"],
+        "note": row["note"],
+        "frequency": row["frequency"],
+        "interval_count": row["interval_count"],
+        "next_due_on": row["next_due_on"],
+        "source_text": row["source_text"],
+        "is_active": bool(row["is_active"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
     }
 
 
@@ -244,17 +549,32 @@ def fetch_category_by_name(conn, category_name):
     ).fetchone()
 
 
-def get_breakdown(conn, start_date, end_date, entry_type):
-    rows = conn.execute(
+def fetch_account_by_name(conn, account_name):
+    return conn.execute(
         """
+        SELECT id, name, is_active, sort_order, created_at, updated_at
+        FROM accounts
+        WHERE name = ?
+        """,
+        (account_name,),
+    ).fetchone()
+
+
+def fetch_recurring_by_id(conn, recurring_id):
+    return conn.execute("SELECT * FROM recurring_transactions WHERE id = ?", (recurring_id,)).fetchone()
+
+
+def get_breakdown(conn, start_date, end_date, entry_type, snapshot_column, label_key):
+    rows = conn.execute(
+        f"""
         SELECT
-            category_name_snapshot AS category,
+            {snapshot_column} AS label,
             SUM(amount_cents) AS total_cents,
             COUNT(*) AS entry_count
         FROM entries
         WHERE occurred_on >= ? AND occurred_on < ? AND entry_type = ?
-        GROUP BY category_name_snapshot
-        ORDER BY total_cents DESC, category_name_snapshot ASC
+        GROUP BY {snapshot_column}
+        ORDER BY total_cents DESC, {snapshot_column} ASC
         """,
         (start_date, end_date, entry_type),
     ).fetchall()
@@ -262,13 +582,75 @@ def get_breakdown(conn, start_date, end_date, entry_type):
     for row in rows:
         breakdown.append(
             {
-                "category": row["category"],
+                label_key: row["label"],
                 "total": cents_to_amount(row["total_cents"]),
                 "total_cents": row["total_cents"],
                 "entry_count": row["entry_count"],
             }
         )
     return breakdown
+
+
+def collect_report_payload(conn, start_date, end_date):
+    totals = {"expense": {"total_cents": 0, "entry_count": 0}, "income": {"total_cents": 0, "entry_count": 0}}
+    for row in conn.execute(
+        """
+        SELECT entry_type, COALESCE(SUM(amount_cents), 0) AS total_cents, COUNT(*) AS entry_count
+        FROM entries
+        WHERE occurred_on >= ? AND occurred_on < ?
+        GROUP BY entry_type
+        """,
+        (start_date, end_date),
+    ):
+        totals[row["entry_type"]] = {
+            "total_cents": row["total_cents"],
+            "entry_count": row["entry_count"],
+        }
+
+    expense_breakdown = get_breakdown(conn, start_date, end_date, "expense", "category_name_snapshot", "category")
+    income_breakdown = get_breakdown(conn, start_date, end_date, "income", "category_name_snapshot", "category")
+    expense_account_breakdown = get_breakdown(conn, start_date, end_date, "expense", "account_name_snapshot", "account")
+    income_account_breakdown = get_breakdown(conn, start_date, end_date, "income", "account_name_snapshot", "account")
+
+    expense_total_cents = totals["expense"]["total_cents"]
+    income_total_cents = totals["income"]["total_cents"]
+    net_total_cents = income_total_cents - expense_total_cents
+
+    return {
+        "expense_total": cents_to_amount(expense_total_cents),
+        "expense_total_cents": expense_total_cents,
+        "income_total": cents_to_amount(income_total_cents),
+        "income_total_cents": income_total_cents,
+        "net_total": cents_to_amount(net_total_cents),
+        "net_total_cents": net_total_cents,
+        "entry_count": totals["expense"]["entry_count"] + totals["income"]["entry_count"],
+        "expense_entry_count": totals["expense"]["entry_count"],
+        "income_entry_count": totals["income"]["entry_count"],
+        "expense_by_category": expense_breakdown,
+        "income_by_category": income_breakdown,
+        "expense_by_account": expense_account_breakdown,
+        "income_by_account": income_account_breakdown,
+        "top_expense_category": expense_breakdown[0] if expense_breakdown else None,
+        "top_income_category": income_breakdown[0] if income_breakdown else None,
+        "top_expense_account": expense_account_breakdown[0] if expense_account_breakdown else None,
+        "top_income_account": income_account_breakdown[0] if income_account_breakdown else None,
+    }
+
+
+def emit_period_report(command, db_path, period_type, period_value, start_date, end_date):
+    with closing(connect_db(db_path)) as conn:
+        report_payload = collect_report_payload(conn, start_date, end_date)
+    emit(
+        {
+            "ok": True,
+            "command": command,
+            "db_path": str(db_path),
+            **build_period_metadata(period_type, period_value),
+            "start_date": start_date,
+            "end_date_exclusive": end_date,
+            **report_payload,
+        }
+    )
 
 
 def cmd_list_categories(args):
@@ -282,6 +664,22 @@ def cmd_list_categories(args):
             "db_path": str(db_path),
             "categories": categories,
             "active_category_names": [item["name"] for item in categories if item["is_active"]],
+        }
+    )
+
+
+def cmd_list_accounts(args):
+    db_path = resolve_db_path(args.db)
+    with closing(connect_db(db_path)) as conn:
+        accounts = [serialize_account_row(row) for row in list_accounts_rows(conn, args.all)]
+    emit(
+        {
+            "ok": True,
+            "command": "list-accounts",
+            "db_path": str(db_path),
+            "accounts": accounts,
+            "active_account_names": [item["name"] for item in accounts if item["is_active"]],
+            "supported_account_names": DEFAULT_ACCOUNT_NAMES,
         }
     )
 
@@ -344,6 +742,47 @@ def cmd_set_categories(args):
     )
 
 
+def cmd_set_accounts(args):
+    names = normalize_account_names(args.names)
+    db_path = resolve_db_path(args.db)
+    now = utc_now()
+    with closing(connect_db(db_path)) as conn:
+        if args.replace:
+            conn.execute("UPDATE accounts SET is_active = 0, updated_at = ? WHERE is_active = 1", (now,))
+            base_order = 0
+        else:
+            base_order = (
+                conn.execute("SELECT COALESCE(MAX(sort_order), -1) AS max_sort_order FROM accounts").fetchone()[
+                    "max_sort_order"
+                ]
+                + 1
+            )
+        for index, name in enumerate(names):
+            conn.execute(
+                """
+                INSERT INTO accounts (name, is_active, sort_order, created_at, updated_at)
+                VALUES (?, 1, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    is_active = 1,
+                    sort_order = excluded.sort_order,
+                    updated_at = excluded.updated_at
+                """,
+                (name, base_order + index, now, now),
+            )
+        conn.commit()
+        accounts = [serialize_account_row(row) for row in list_accounts_rows(conn, include_inactive=False)]
+    emit(
+        {
+            "ok": True,
+            "command": "set-accounts",
+            "db_path": str(db_path),
+            "replace": bool(args.replace),
+            "accounts": accounts,
+            "supported_account_names": DEFAULT_ACCOUNT_NAMES,
+        }
+    )
+
+
 def cmd_record(args):
     db_path = resolve_db_path(args.db)
     amount_cents = parse_amount_to_cents(args.amount)
@@ -367,6 +806,15 @@ def cmd_record(args):
                 provided_category=category_snapshot,
                 active_categories=active_names,
             )
+        account_id, account_snapshot, account_matched = resolve_account(conn, args.account)
+        active_accounts = active_account_names(conn)
+        if args.strict_account and not account_matched:
+            fail(
+                "Account does not match an active predefined account.",
+                provided_account=account_snapshot,
+                active_accounts=active_accounts,
+                supported_accounts=DEFAULT_ACCOUNT_NAMES,
+            )
         created_at = utc_now()
         cursor = conn.execute(
             """
@@ -376,13 +824,15 @@ def cmd_record(args):
                 currency,
                 category_id,
                 category_name_snapshot,
+                account_id,
+                account_name_snapshot,
                 description,
                 note,
                 occurred_on,
                 source_text,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entry_type,
@@ -390,6 +840,8 @@ def cmd_record(args):
                 currency,
                 category_id,
                 category_snapshot,
+                account_id,
+                account_snapshot,
                 description,
                 note,
                 occurred_on,
@@ -402,6 +854,7 @@ def cmd_record(args):
 
     payload = serialize_entry_row(row)
     payload["category_matched_active_category"] = matched
+    payload["account_matched_active_account"] = account_matched
     emit(
         {
             "ok": True,
@@ -414,7 +867,7 @@ def cmd_record(args):
 
 def cmd_list_transactions(args):
     db_path = resolve_db_path(args.db)
-    month_value, start_date, end_date = month_bounds(args.month)
+    period_type, period_value, start_date, end_date = select_transaction_period(args)
     params = [start_date, end_date]
     query = """
         SELECT *
@@ -427,6 +880,9 @@ def cmd_list_transactions(args):
     if args.category:
         query += " AND category_name_snapshot = ?"
         params.append(args.category.strip())
+    if args.account:
+        query += " AND account_name_snapshot = ?"
+        params.append(normalize_account_name(args.account, allow_default=True))
     query += " ORDER BY occurred_on DESC, id DESC LIMIT ?"
     params.append(args.limit)
 
@@ -438,11 +894,12 @@ def cmd_list_transactions(args):
             "ok": True,
             "command": "list-transactions",
             "db_path": str(db_path),
-            "month": month_value,
+            **build_period_metadata(period_type, period_value),
             "start_date": start_date,
             "end_date_exclusive": end_date,
             "type_filter": args.type,
             "category_filter": args.category,
+            "account_filter": normalize_account_name(args.account, allow_default=True) if args.account else None,
             "limit": args.limit,
             "entries": [serialize_entry_row(row) for row in rows],
         }
@@ -463,6 +920,9 @@ def cmd_recent_transactions(args):
     if args.category:
         filters.append("category_name_snapshot = ?")
         params.append(args.category.strip())
+    if args.account:
+        filters.append("account_name_snapshot = ?")
+        params.append(normalize_account_name(args.account, allow_default=True))
     if filters:
         query += " WHERE " + " AND ".join(filters)
     query += " ORDER BY id DESC LIMIT ?"
@@ -478,6 +938,7 @@ def cmd_recent_transactions(args):
             "db_path": str(db_path),
             "type_filter": args.type,
             "category_filter": args.category,
+            "account_filter": normalize_account_name(args.account, allow_default=True) if args.account else None,
             "limit": args.limit,
             "entries": [serialize_entry_row(row) for row in rows],
         }
@@ -504,51 +965,305 @@ def cmd_latest_entry(args):
 def cmd_month_report(args):
     db_path = resolve_db_path(args.db)
     month_value, start_date, end_date = month_bounds(args.month)
+    emit_period_report("month-report", db_path, "month", month_value, start_date, end_date)
+
+
+def cmd_day_report(args):
+    db_path = resolve_db_path(args.db)
+    day_value, start_date, end_date = day_bounds(args.date)
+    emit_period_report("day-report", db_path, "date", day_value, start_date, end_date)
+
+
+def cmd_week_report(args):
+    db_path = resolve_db_path(args.db)
+    week_value, start_date, end_date = week_bounds(week_value=args.week, date_value=args.date)
+    emit_period_report("week-report", db_path, "week", week_value, start_date, end_date)
+
+
+def cmd_year_report(args):
+    db_path = resolve_db_path(args.db)
+    year_value, start_date, end_date = year_bounds(args.year)
+    emit_period_report("year-report", db_path, "year", year_value, start_date, end_date)
+
+
+def cmd_add_recurring(args):
+    db_path = resolve_db_path(args.db)
+    amount_cents = parse_amount_to_cents(args.amount)
+    next_due_on = parse_iso_date(args.next_date).isoformat()
+    description = args.description.strip()
+    if not description:
+        fail("Description is required.")
+    note = args.note.strip() if args.note else None
+    source_text = args.source_text.strip() if args.source_text else None
+    currency = args.currency.strip().upper() if args.currency else "CNY"
+    if not currency:
+        currency = "CNY"
 
     with closing(connect_db(db_path)) as conn:
-        totals = {"expense": {"total_cents": 0, "entry_count": 0}, "income": {"total_cents": 0, "entry_count": 0}}
-        for row in conn.execute(
+        category_id, category_snapshot, category_matched = resolve_category(conn, args.category)
+        active_categories = active_category_names(conn)
+        if args.strict_category and not category_matched:
+            fail(
+                "Category does not match an active predefined category.",
+                provided_category=category_snapshot,
+                active_categories=active_categories,
+            )
+        account_id, account_snapshot, account_matched = resolve_account(conn, args.account)
+        active_accounts = active_account_names(conn)
+        if args.strict_account and not account_matched:
+            fail(
+                "Account does not match an active predefined account.",
+                provided_account=account_snapshot,
+                active_accounts=active_accounts,
+                supported_accounts=DEFAULT_ACCOUNT_NAMES,
+            )
+        now = utc_now()
+        cursor = conn.execute(
             """
-            SELECT entry_type, COALESCE(SUM(amount_cents), 0) AS total_cents, COUNT(*) AS entry_count
-            FROM entries
-            WHERE occurred_on >= ? AND occurred_on < ?
-            GROUP BY entry_type
+            INSERT INTO recurring_transactions (
+                entry_type,
+                amount_cents,
+                currency,
+                category_id,
+                category_name_snapshot,
+                account_id,
+                account_name_snapshot,
+                description,
+                note,
+                frequency,
+                interval_count,
+                next_due_on,
+                source_text,
+                is_active,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
             """,
-            (start_date, end_date),
-        ):
-            totals[row["entry_type"]] = {
-                "total_cents": row["total_cents"],
-                "entry_count": row["entry_count"],
-            }
+            (
+                args.type,
+                amount_cents,
+                currency,
+                category_id,
+                category_snapshot,
+                account_id,
+                account_snapshot,
+                description,
+                note,
+                args.frequency,
+                args.interval,
+                next_due_on,
+                source_text,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM recurring_transactions WHERE id = ?", (cursor.lastrowid,)).fetchone()
 
-        expense_breakdown = get_breakdown(conn, start_date, end_date, "expense")
-        income_breakdown = get_breakdown(conn, start_date, end_date, "income")
+    payload = serialize_recurring_row(row)
+    payload["category_matched_active_category"] = category_matched
+    payload["account_matched_active_account"] = account_matched
+    emit(
+        {
+            "ok": True,
+            "command": "add-recurring",
+            "db_path": str(db_path),
+            "recurring_transaction": payload,
+        }
+    )
 
-    expense_total_cents = totals["expense"]["total_cents"]
-    income_total_cents = totals["income"]["total_cents"]
-    net_total_cents = income_total_cents - expense_total_cents
+
+def cmd_list_recurring(args):
+    db_path = resolve_db_path(args.db)
+    params = []
+    query = """
+        SELECT *
+        FROM recurring_transactions
+    """
+    filters = []
+    if not args.all:
+        filters.append("is_active = 1")
+    if args.type:
+        filters.append("entry_type = ?")
+        params.append(args.type)
+    if args.frequency:
+        filters.append("frequency = ?")
+        params.append(args.frequency)
+    if args.category:
+        filters.append("category_name_snapshot = ?")
+        params.append(args.category.strip())
+    if args.account:
+        filters.append("account_name_snapshot = ?")
+        params.append(normalize_account_name(args.account, allow_default=True))
+    due_by = None
+    if args.due_by:
+        due_by = parse_iso_date(args.due_by).isoformat()
+        filters.append("next_due_on <= ?")
+        params.append(due_by)
+    if filters:
+        query += " WHERE " + " AND ".join(filters)
+    query += " ORDER BY next_due_on ASC, id ASC LIMIT ?"
+    params.append(args.limit)
+
+    with closing(connect_db(db_path)) as conn:
+        rows = conn.execute(query, params).fetchall()
 
     emit(
         {
             "ok": True,
-            "command": "month-report",
+            "command": "list-recurring",
             "db_path": str(db_path),
-            "month": month_value,
-            "start_date": start_date,
-            "end_date_exclusive": end_date,
-            "expense_total": cents_to_amount(expense_total_cents),
-            "expense_total_cents": expense_total_cents,
-            "income_total": cents_to_amount(income_total_cents),
-            "income_total_cents": income_total_cents,
-            "net_total": cents_to_amount(net_total_cents),
-            "net_total_cents": net_total_cents,
-            "entry_count": totals["expense"]["entry_count"] + totals["income"]["entry_count"],
-            "expense_entry_count": totals["expense"]["entry_count"],
-            "income_entry_count": totals["income"]["entry_count"],
-            "expense_by_category": expense_breakdown,
-            "income_by_category": income_breakdown,
-            "top_expense_category": expense_breakdown[0] if expense_breakdown else None,
-            "top_income_category": income_breakdown[0] if income_breakdown else None,
+            "include_inactive": bool(args.all),
+            "type_filter": args.type,
+            "frequency_filter": args.frequency,
+            "category_filter": args.category,
+            "account_filter": normalize_account_name(args.account, allow_default=True) if args.account else None,
+            "due_by": due_by,
+            "limit": args.limit,
+            "recurring_transactions": [serialize_recurring_row(row) for row in rows],
+        }
+    )
+
+
+def cmd_update_recurring(args):
+    db_path = resolve_db_path(args.db)
+    with closing(connect_db(db_path)) as conn:
+        row = fetch_recurring_by_id(conn, args.id)
+        if row is None:
+            fail("Recurring transaction not found.", recurring_transaction_id=args.id)
+
+        updates = {}
+        updated_fields = []
+        category_matched = None
+        account_matched = None
+        active_categories = None
+        active_accounts = None
+
+        if args.type is not None:
+            updates["entry_type"] = args.type
+            updated_fields.append("type")
+        if args.amount is not None:
+            updates["amount_cents"] = parse_amount_to_cents(args.amount)
+            updated_fields.append("amount")
+        if args.currency is not None:
+            currency = args.currency.strip().upper() if args.currency else "CNY"
+            if not currency:
+                currency = "CNY"
+            updates["currency"] = currency
+            updated_fields.append("currency")
+        if args.category is not None:
+            category_id, category_snapshot, category_matched = resolve_category(conn, args.category)
+            active_categories = active_category_names(conn)
+            if args.strict_category and not category_matched:
+                fail(
+                    "Category does not match an active predefined category.",
+                    provided_category=category_snapshot,
+                    active_categories=active_categories,
+                )
+            updates["category_id"] = category_id
+            updates["category_name_snapshot"] = category_snapshot
+            updated_fields.append("category")
+        if args.account is not None:
+            account_id, account_snapshot, account_matched = resolve_account(conn, args.account)
+            active_accounts = active_account_names(conn)
+            if args.strict_account and not account_matched:
+                fail(
+                    "Account does not match an active predefined account.",
+                    provided_account=account_snapshot,
+                    active_accounts=active_accounts,
+                    supported_accounts=DEFAULT_ACCOUNT_NAMES,
+                )
+            updates["account_id"] = account_id
+            updates["account_name_snapshot"] = account_snapshot
+            updated_fields.append("account")
+        if args.description is not None:
+            description = args.description.strip()
+            if not description:
+                fail("Description is required.")
+            updates["description"] = description
+            updated_fields.append("description")
+        if args.note is not None:
+            note = args.note.strip()
+            updates["note"] = note or None
+            updated_fields.append("note")
+        if args.frequency is not None:
+            updates["frequency"] = args.frequency
+            updated_fields.append("frequency")
+        if args.interval is not None:
+            updates["interval_count"] = args.interval
+            updated_fields.append("interval")
+        if args.next_date is not None:
+            updates["next_due_on"] = parse_iso_date(args.next_date).isoformat()
+            updated_fields.append("next_date")
+        if args.source_text is not None:
+            source_text = args.source_text.strip()
+            updates["source_text"] = source_text or None
+            updated_fields.append("source_text")
+        if args.activate:
+            updates["is_active"] = 1
+            updated_fields.append("activate")
+        if args.deactivate:
+            updates["is_active"] = 0
+            updated_fields.append("deactivate")
+
+        if not updates:
+            fail("Provide at least one field to update.")
+
+        updates["updated_at"] = utc_now()
+        update_pairs = list(updates.items())
+        query = (
+            "UPDATE recurring_transactions SET "
+            + ", ".join(f"{column} = ?" for column, _ in update_pairs)
+            + " WHERE id = ?"
+        )
+        values = [value for _, value in update_pairs]
+        values.append(args.id)
+        conn.execute(query, values)
+        conn.commit()
+        updated_row = fetch_recurring_by_id(conn, args.id)
+
+    payload = serialize_recurring_row(updated_row)
+    if category_matched is not None:
+        payload["category_matched_active_category"] = category_matched
+    if account_matched is not None:
+        payload["account_matched_active_account"] = account_matched
+    emit(
+        {
+            "ok": True,
+            "command": "update-recurring",
+            "db_path": str(db_path),
+            "updated_fields": updated_fields,
+            "active_categories": active_categories,
+            "active_accounts": active_accounts,
+            "recurring_transaction": payload,
+        }
+    )
+
+
+def cmd_delete_recurring(args):
+    db_path = resolve_db_path(args.db)
+    with closing(connect_db(db_path)) as conn:
+        row = fetch_recurring_by_id(conn, args.id)
+        if row is None:
+            fail("Recurring transaction not found.", recurring_transaction_id=args.id)
+        if not row["is_active"]:
+            fail("Recurring transaction is already inactive.", recurring_transaction_id=args.id)
+        deleted_payload = serialize_recurring_row(row)
+        conn.execute(
+            "UPDATE recurring_transactions SET is_active = 0, updated_at = ? WHERE id = ?",
+            (utc_now(), args.id),
+        )
+        conn.commit()
+        counts = get_db_counts(conn)
+
+    emit(
+        {
+            "ok": True,
+            "command": "delete-recurring",
+            "db_path": str(db_path),
+            "deleted_recurring_transaction": deleted_payload,
+            **counts,
         }
     )
 
@@ -563,7 +1278,9 @@ def cmd_update_entry(args):
         updates = {}
         updated_fields = []
         matched = None
+        account_matched = None
         active_names = None
+        active_accounts = None
 
         if args.type is not None:
             updates["entry_type"] = args.type
@@ -589,6 +1306,19 @@ def cmd_update_entry(args):
             updates["category_id"] = category_id
             updates["category_name_snapshot"] = category_snapshot
             updated_fields.append("category")
+        if args.account is not None:
+            account_id, account_snapshot, account_matched = resolve_account(conn, args.account)
+            active_accounts = active_account_names(conn)
+            if args.strict_account and not account_matched:
+                fail(
+                    "Account does not match an active predefined account.",
+                    provided_account=account_snapshot,
+                    active_accounts=active_accounts,
+                    supported_accounts=DEFAULT_ACCOUNT_NAMES,
+                )
+            updates["account_id"] = account_id
+            updates["account_name_snapshot"] = account_snapshot
+            updated_fields.append("account")
         if args.description is not None:
             description = args.description.strip()
             if not description:
@@ -621,6 +1351,8 @@ def cmd_update_entry(args):
     payload = serialize_entry_row(updated_row)
     if matched is not None:
         payload["category_matched_active_category"] = matched
+    if account_matched is not None:
+        payload["account_matched_active_account"] = account_matched
     emit(
         {
             "ok": True,
@@ -628,6 +1360,7 @@ def cmd_update_entry(args):
             "db_path": str(db_path),
             "updated_fields": updated_fields,
             "active_categories": active_names,
+            "active_accounts": active_accounts,
             "entry": payload,
         }
     )
@@ -693,6 +1426,43 @@ def cmd_delete_category(args):
     )
 
 
+def cmd_delete_account(args):
+    db_path = resolve_db_path(args.db)
+    account_name = normalize_account_name(args.name, allow_default=False)
+
+    with closing(connect_db(db_path)) as conn:
+        row = fetch_account_by_name(conn, account_name)
+        if row is None:
+            fail("Account not found.", account=account_name)
+        if not row["is_active"]:
+            fail("Account is already inactive.", account=account_name)
+
+        now = utc_now()
+        conn.execute(
+            """
+            UPDATE accounts
+            SET is_active = 0, updated_at = ?
+            WHERE id = ?
+            """,
+            (now, row["id"]),
+        )
+        conn.commit()
+        deleted_account = fetch_account_by_name(conn, account_name)
+        accounts = [serialize_account_row(item) for item in list_accounts_rows(conn, include_inactive=False)]
+
+    emit(
+        {
+            "ok": True,
+            "command": "delete-account",
+            "db_path": str(db_path),
+            "deleted_account": serialize_account_row(deleted_account),
+            "accounts": accounts,
+            "active_account_names": [item["name"] for item in accounts],
+            "supported_account_names": DEFAULT_ACCOUNT_NAMES,
+        }
+    )
+
+
 def cmd_delete_latest_entry(args):
     db_path = resolve_db_path(args.db)
     with closing(connect_db(db_path)) as conn:
@@ -727,15 +1497,25 @@ def build_parser():
     list_categories.add_argument("--all", action="store_true", help="Include inactive categories")
     list_categories.set_defaults(func=cmd_list_categories)
 
+    list_accounts = subparsers.add_parser("list-accounts", help="List supported user accounts")
+    list_accounts.add_argument("--all", action="store_true", help="Include inactive accounts")
+    list_accounts.set_defaults(func=cmd_list_accounts)
+
     set_categories = subparsers.add_parser("set-categories", help="Add or replace categories")
     set_categories.add_argument("names", nargs="+", help="Category names")
     set_categories.add_argument("--replace", action="store_true", help="Replace the active category set")
     set_categories.set_defaults(func=cmd_set_categories)
 
+    set_accounts = subparsers.add_parser("set-accounts", help="Add or replace active accounts")
+    set_accounts.add_argument("names", nargs="+", help="Account names")
+    set_accounts.add_argument("--replace", action="store_true", help="Replace the active account set")
+    set_accounts.set_defaults(func=cmd_set_accounts)
+
     record = subparsers.add_parser("record", help="Record one transaction")
     record.add_argument("--type", choices=["expense", "income"], default="expense", help="Transaction type")
     record.add_argument("--amount", required=True, help="Positive amount")
     record.add_argument("--category", default=DEFAULT_UNCATEGORIZED, help="Category name")
+    record.add_argument("--account", default=DEFAULT_UNSPECIFIED_ACCOUNT, help="Account name")
     record.add_argument("--description", required=True, help="Short description")
     record.add_argument("--note", help="Additional note")
     record.add_argument("--date", default=date.today().isoformat(), help="Occurrence date in YYYY-MM-DD")
@@ -746,12 +1526,25 @@ def build_parser():
         action="store_true",
         help="Require the category to match an active predefined category",
     )
+    record.add_argument(
+        "--strict-account",
+        action="store_true",
+        help="Require the account to match an active predefined account",
+    )
     record.set_defaults(func=cmd_record)
 
-    list_transactions = subparsers.add_parser("list-transactions", help="List transactions for one month")
-    list_transactions.add_argument("--month", help="Target month in YYYY-MM; defaults to the current month")
+    list_transactions = subparsers.add_parser(
+        "list-transactions",
+        help="List transactions for one date, ISO week, month, or year",
+    )
+    list_period = list_transactions.add_mutually_exclusive_group()
+    list_period.add_argument("--date", help="Target date in YYYY-MM-DD")
+    list_period.add_argument("--week", help="Target ISO week in YYYY-Www")
+    list_period.add_argument("--month", help="Target month in YYYY-MM; defaults to the current month")
+    list_period.add_argument("--year", help="Target year in YYYY")
     list_transactions.add_argument("--type", choices=["expense", "income"], help="Optional type filter")
     list_transactions.add_argument("--category", help="Optional category filter")
+    list_transactions.add_argument("--account", help="Optional account filter")
     list_transactions.add_argument("--limit", type=int, default=100, help="Maximum number of entries to return")
     list_transactions.set_defaults(func=cmd_list_transactions)
 
@@ -761,15 +1554,64 @@ def build_parser():
     )
     recent_transactions.add_argument("--type", choices=["expense", "income"], help="Optional type filter")
     recent_transactions.add_argument("--category", help="Optional category filter")
+    recent_transactions.add_argument("--account", help="Optional account filter")
     recent_transactions.add_argument("--limit", type=int, default=10, help="Maximum number of entries to return")
     recent_transactions.set_defaults(func=cmd_recent_transactions)
 
     latest_entry = subparsers.add_parser("latest-entry", help="Show the latest transaction")
     latest_entry.set_defaults(func=cmd_latest_entry)
 
+    day_report = subparsers.add_parser("day-report", help="Get totals and category breakdown for one date")
+    day_report.add_argument("--date", help="Target date in YYYY-MM-DD; defaults to today")
+    day_report.set_defaults(func=cmd_day_report)
+
+    week_report = subparsers.add_parser("week-report", help="Get totals and category breakdown for one ISO week")
+    week_report_period = week_report.add_mutually_exclusive_group()
+    week_report_period.add_argument("--week", help="Target ISO week in YYYY-Www")
+    week_report_period.add_argument("--date", help="Reference date in YYYY-MM-DD; uses the ISO week containing it")
+    week_report.set_defaults(func=cmd_week_report)
+
     month_report = subparsers.add_parser("month-report", help="Get totals and category breakdown for one month")
     month_report.add_argument("--month", help="Target month in YYYY-MM; defaults to the current month")
     month_report.set_defaults(func=cmd_month_report)
+
+    year_report = subparsers.add_parser("year-report", help="Get totals and category breakdown for one year")
+    year_report.add_argument("--year", help="Target year in YYYY; defaults to the current year")
+    year_report.set_defaults(func=cmd_year_report)
+
+    add_recurring = subparsers.add_parser("add-recurring", help="Add one recurring transaction schedule")
+    add_recurring.add_argument("--type", choices=["expense", "income"], default="expense", help="Transaction type")
+    add_recurring.add_argument("--amount", required=True, help="Positive amount")
+    add_recurring.add_argument("--category", default=DEFAULT_UNCATEGORIZED, help="Category name")
+    add_recurring.add_argument("--account", default=DEFAULT_UNSPECIFIED_ACCOUNT, help="Account name")
+    add_recurring.add_argument("--description", required=True, help="Short description")
+    add_recurring.add_argument("--note", help="Additional note")
+    add_recurring.add_argument("--currency", default="CNY", help="Currency code")
+    add_recurring.add_argument("--frequency", choices=sorted(RECURRING_FREQUENCIES), required=True, help="Frequency")
+    add_recurring.add_argument("--interval", type=int, default=1, help="Repeat every N frequency units")
+    add_recurring.add_argument("--next-date", required=True, help="Next due date in YYYY-MM-DD")
+    add_recurring.add_argument("--source-text", help="Original natural-language prompt")
+    add_recurring.add_argument(
+        "--strict-category",
+        action="store_true",
+        help="Require the category to match an active predefined category",
+    )
+    add_recurring.add_argument(
+        "--strict-account",
+        action="store_true",
+        help="Require the account to match an active predefined account",
+    )
+    add_recurring.set_defaults(func=cmd_add_recurring)
+
+    list_recurring = subparsers.add_parser("list-recurring", help="List recurring transaction schedules")
+    list_recurring.add_argument("--all", action="store_true", help="Include inactive recurring transactions")
+    list_recurring.add_argument("--type", choices=["expense", "income"], help="Optional type filter")
+    list_recurring.add_argument("--frequency", choices=sorted(RECURRING_FREQUENCIES), help="Optional frequency filter")
+    list_recurring.add_argument("--category", help="Optional category filter")
+    list_recurring.add_argument("--account", help="Optional account filter")
+    list_recurring.add_argument("--due-by", help="Optional due date filter in YYYY-MM-DD")
+    list_recurring.add_argument("--limit", type=int, default=100, help="Maximum number of rows to return")
+    list_recurring.set_defaults(func=cmd_list_recurring)
 
     update_entry = subparsers.add_parser("update-entry", help="Update one transaction by id")
     update_entry.add_argument("--id", type=int, required=True, help="Entry id to update")
@@ -777,6 +1619,7 @@ def build_parser():
     update_entry.add_argument("--amount", help="Updated positive amount")
     update_entry.add_argument("--currency", help="Updated currency code")
     update_entry.add_argument("--category", help="Updated category name")
+    update_entry.add_argument("--account", help="Updated account name")
     update_entry.add_argument("--description", help="Updated short description")
     update_entry.add_argument("--note", help="Updated note; use an empty string to clear it")
     update_entry.add_argument("--date", help="Updated occurrence date in YYYY-MM-DD")
@@ -786,11 +1629,48 @@ def build_parser():
         action="store_true",
         help="Require the updated category to match an active predefined category",
     )
+    update_entry.add_argument(
+        "--strict-account",
+        action="store_true",
+        help="Require the updated account to match an active predefined account",
+    )
     update_entry.set_defaults(func=cmd_update_entry)
+
+    update_recurring = subparsers.add_parser("update-recurring", help="Update one recurring transaction by id")
+    update_recurring.add_argument("--id", type=int, required=True, help="Recurring transaction id to update")
+    update_recurring.add_argument("--type", choices=["expense", "income"], help="Updated transaction type")
+    update_recurring.add_argument("--amount", help="Updated positive amount")
+    update_recurring.add_argument("--currency", help="Updated currency code")
+    update_recurring.add_argument("--category", help="Updated category name")
+    update_recurring.add_argument("--account", help="Updated account name")
+    update_recurring.add_argument("--description", help="Updated short description")
+    update_recurring.add_argument("--note", help="Updated note; use an empty string to clear it")
+    update_recurring.add_argument("--frequency", choices=sorted(RECURRING_FREQUENCIES), help="Updated frequency")
+    update_recurring.add_argument("--interval", type=int, help="Updated repeat interval")
+    update_recurring.add_argument("--next-date", help="Updated next due date in YYYY-MM-DD")
+    update_recurring.add_argument("--source-text", help="Updated original natural-language prompt")
+    active_toggle = update_recurring.add_mutually_exclusive_group()
+    active_toggle.add_argument("--activate", action="store_true", help="Activate this recurring transaction")
+    active_toggle.add_argument("--deactivate", action="store_true", help="Deactivate this recurring transaction")
+    update_recurring.add_argument(
+        "--strict-category",
+        action="store_true",
+        help="Require the category to match an active predefined category",
+    )
+    update_recurring.add_argument(
+        "--strict-account",
+        action="store_true",
+        help="Require the account to match an active predefined account",
+    )
+    update_recurring.set_defaults(func=cmd_update_recurring)
 
     delete_entry = subparsers.add_parser("delete-entry", help="Delete one transaction by id")
     delete_entry.add_argument("--id", type=int, required=True, help="Entry id to delete")
     delete_entry.set_defaults(func=cmd_delete_entry)
+
+    delete_recurring = subparsers.add_parser("delete-recurring", help="Deactivate one recurring transaction by id")
+    delete_recurring.add_argument("--id", type=int, required=True, help="Recurring transaction id to deactivate")
+    delete_recurring.set_defaults(func=cmd_delete_recurring)
 
     delete_latest_entry = subparsers.add_parser("delete-latest-entry", help="Delete the latest transaction")
     delete_latest_entry.set_defaults(func=cmd_delete_latest_entry)
@@ -798,6 +1678,10 @@ def build_parser():
     delete_category = subparsers.add_parser("delete-category", help="Deactivate one category by name")
     delete_category.add_argument("--name", required=True, help="Active category name to deactivate")
     delete_category.set_defaults(func=cmd_delete_category)
+
+    delete_account = subparsers.add_parser("delete-account", help="Deactivate one account by name")
+    delete_account.add_argument("--name", required=True, help="Active account name to deactivate")
+    delete_account.set_defaults(func=cmd_delete_account)
 
     return parser
 
@@ -814,6 +1698,8 @@ def main():
         fail("Limit must be greater than zero.", provided=args.limit)
     if hasattr(args, "id") and args.id <= 0:
         fail("Entry id must be greater than zero.", provided=args.id)
+    if hasattr(args, "interval") and args.interval is not None and args.interval <= 0:
+        fail("Interval must be greater than zero.", provided=args.interval)
     args.func(args)
 
 

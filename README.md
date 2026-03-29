@@ -7,23 +7,34 @@ The repository root itself is the skill root.
 
 ```text
 .
-├── SKILL.md
-├── references/
-│   ├── commands.md
-│   └── chat_reference.md
-└── scripts/
-    └── bookkeeping.py
+|-- SKILL.md
+|-- references/
+|   |-- commands.md
+|   `-- chat_reference.md
+|-- scripts/
+|   `-- bookkeeping.py
+|-- test/
+|   |-- README.md
+|   |-- run_cli_tests.py
+|   |-- run_smoke.py
+|   |-- setup.ps1
+|   `-- test_bookkeeping_cli.py
+`-- skill-creator/
 ```
 
 - `SKILL.md`: frontmatter and agent instructions.
 - `references/`: reference material the agent can load on demand.
 - `scripts/bookkeeping.py`: the bundled runtime used to read and write bookkeeping data.
+- `test/`: local-only verification scripts for the SQLite helper and CLI behavior.
+- `skill-creator/`: local helper content for creating or validating skills; not part of the delivered runtime.
 
 ## What The Skill Does
 
 - Records expenses and income from Chinese natural-language prompts
 - Manages user-defined categories
-- Answers monthly totals, category breakdowns, monthly details, recent transactions, and latest-entry queries
+- Supports user accounts such as cash, Alipay, WeChat, bank cards, and credit cards
+- Tracks recurring transactions as a schedule table for periodic payments or income
+- Answers daily, weekly, monthly, and yearly totals, category breakdowns, period details, recent transactions, and latest-entry queries
 - Supports updating and deleting saved entries
 
 ## Runtime
@@ -46,7 +57,11 @@ OpenClaw loads skills from skill directories. To install this skill manually:
 ## Example Triggers
 
 - `记账 我喝奶茶用了10元`
+- `用支付宝记一笔午饭 25 元`
 - `把分类设置为日常、学习、电器`
+- `列出所有账户`
+- `添加周期性支出 每月 1 号交房租 3000 用银行卡`
+- `显示这周花了多少`
 - `显示我这个月的账单是多少`
 - `展示出最新的10个账单`
 - `修改一笔账 1 金额为12元，分类为学习`
@@ -56,4 +71,4 @@ OpenClaw loads skills from skill directories. To install this skill manually:
 
 - The skill is intended for agent use, so the main behavior contract lives in `SKILL.md`.
 - `references/` exists to keep `SKILL.md` lean and provide detailed command shapes only when needed.
-- `skill-creator/` is only a local helper for creating or validating skills and is not part of the delivered root skill contract.
+- `test/` and `skill-creator/` are local maintenance helpers and are not part of the uploaded OpenClaw runtime payload.

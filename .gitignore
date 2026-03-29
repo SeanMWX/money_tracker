@@ -1,1 +1,13 @@
 skill-creator/
+.venv/
+test/.venv/
+test/data/
+test/__pycache__/
+__pycache__/
+*.py[cod]
+*.db-shm
+*.db-wal
+.pytest_cache/
+.coverage
+dist/
+*.skill
