@@ -344,6 +344,97 @@ class TestBookkeepingCli(CliTestCase):
         self.assertEqual(payload["totals_by_currency"][0]["currency"], "USD")
         self.assertEqual(payload["totals_by_currency"][0]["balance"], "40.00")
 
+    def test_account_balances_include_inactive_wallets_with_all(self) -> None:
+        self.run_cli("set-categories", "--replace", "salary")
+        self.run_cli("set-accounts", "--replace", "Wise:USD")
+
+        code, payload, _ = self.run_cli(
+            "record",
+            "--type",
+            "income",
+            "--amount",
+            "100",
+            "--category",
+            "salary",
+            "--account",
+            "Wise",
+            "--description",
+            "salary_usd",
+            "--date",
+            "2026-03-01",
+            "--strict-category",
+            "--strict-account",
+        )
+        self.assertEqual(code, 0, payload)
+
+        code, payload, _ = self.run_cli("delete-account", "--name", "Wise:USD")
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["active_account_labels"], [])
+
+        code, payload, _ = self.run_cli("account-balances")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["accounts"], [])
+        self.assertEqual(payload["totals_by_currency"], [])
+
+        code, payload, _ = self.run_cli("account-balances", "--all")
+        self.assertEqual(code, 0)
+        accounts_by_label = {item["label"]: item for item in payload["accounts"]}
+        self.assertIn(ACCOUNT_WISE_USD, accounts_by_label)
+        self.assertFalse(accounts_by_label[ACCOUNT_WISE_USD]["is_active"])
+        self.assertEqual(accounts_by_label[ACCOUNT_WISE_USD]["balance"], "100.00")
+        totals_by_currency = {item["currency"]: item["balance"] for item in payload["totals_by_currency"]}
+        self.assertEqual(totals_by_currency["USD"], "100.00")
+
+    def test_ambiguous_wallet_filters_require_currency(self) -> None:
+        self.run_cli("set-categories", "--replace", "daily", "salary")
+        self.run_cli("set-accounts", "--replace", "Wise:USD", "Wise:EUR")
+
+        code, payload, _ = self.run_cli(
+            "record",
+            "--amount",
+            "10",
+            "--category",
+            "daily",
+            "--account",
+            "Wise:USD",
+            "--description",
+            "subscription",
+            "--date",
+            "2026-03-15",
+            "--strict-category",
+            "--strict-account",
+        )
+        self.assertEqual(code, 0, payload)
+
+        code, payload, _ = self.run_cli(
+            "add-recurring",
+            "--type",
+            "income",
+            "--amount",
+            "20",
+            "--category",
+            "salary",
+            "--account",
+            "Wise:USD",
+            "--description",
+            "bonus",
+            "--frequency",
+            "monthly",
+            "--next-date",
+            "2026-04-01",
+            "--strict-category",
+            "--strict-account",
+        )
+        self.assertEqual(code, 0, payload)
+
+        code, payload, _ = self.run_cli("list-transactions", "--month", "2026-03", "--account", "Wise")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "Account is ambiguous. Specify the currency, for example 银行卡:USD.")
+
+        code, payload, _ = self.run_cli("list-recurring", "--account", "Wise")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "Account is ambiguous. Specify the currency, for example 银行卡:USD.")
+
     def test_record_defaults_to_uncategorized_and_unspecified_account_when_not_strict(self) -> None:
         code, payload, _ = self.run_cli("record", "--amount", "5", "--description", "water")
         self.assertEqual(code, 0)
@@ -395,6 +486,108 @@ class TestBookkeepingCli(CliTestCase):
         )
         self.assertEqual(code, 1)
         self.assertEqual(payload["error"], "Account does not match an active predefined account.")
+
+    def test_record_unknown_wallet_without_strict_keeps_snapshot(self) -> None:
+        self.run_cli("set-categories", "--replace", "daily")
+        self.run_cli("set-accounts", "--replace", "\u652f\u4ed8\u5b9d")
+
+        code, payload, _ = self.run_cli(
+            "record",
+            "--amount",
+            "12",
+            "--category",
+            "daily",
+            "--account",
+            "PayPal:USD",
+            "--description",
+            "subscription",
+            "--date",
+            "2026-03-15",
+            "--strict-category",
+        )
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["entry"]["account"], "PayPal (USD)")
+        self.assertEqual(payload["entry"]["currency"], "USD")
+        self.assertFalse(payload["entry"]["account_matched_active_account"])
+
+        code, payload, _ = self.run_cli("recent-transactions", "--account", "PayPal:USD", "--limit", "5")
+        self.assertEqual(code, 0)
+        self.assertEqual([item["description"] for item in payload["entries"]], ["subscription"])
+
+        code, payload, _ = self.run_cli("account-balances", "--all")
+        self.assertEqual(code, 0)
+        labels = [item["label"] for item in payload["accounts"]]
+        self.assertNotIn("PayPal (USD)", labels)
+
+    def test_reports_mix_currencies_without_conversion(self) -> None:
+        self.run_cli("set-categories", "--replace", "daily", "salary")
+        self.run_cli("set-accounts", "--replace", "\u652f\u4ed8\u5b9d", "\u94f6\u884c\u5361:USD", "Revolut:EUR")
+
+        for args in (
+            (
+                "record",
+                "--amount",
+                "10",
+                "--category",
+                "daily",
+                "--account",
+                "\u652f\u4ed8\u5b9d",
+                "--description",
+                "tea",
+                "--date",
+                "2026-03-01",
+                "--strict-category",
+                "--strict-account",
+            ),
+            (
+                "record",
+                "--amount",
+                "20",
+                "--category",
+                "daily",
+                "--account",
+                "\u94f6\u884c\u5361:USD",
+                "--description",
+                "subscription",
+                "--date",
+                "2026-03-02",
+                "--strict-category",
+                "--strict-account",
+            ),
+            (
+                "record",
+                "--type",
+                "income",
+                "--amount",
+                "30",
+                "--category",
+                "salary",
+                "--account",
+                "Revolut:EUR",
+                "--description",
+                "salary_eur",
+                "--date",
+                "2026-03-03",
+                "--strict-category",
+                "--strict-account",
+            ),
+        ):
+            code, payload, _ = self.run_cli(*args)
+            self.assertEqual(code, 0, payload)
+
+        code, payload, _ = self.run_cli("month-report", "--month", "2026-03")
+        self.assertEqual(code, 0)
+        self.assert_ok(payload, "month-report")
+        self.assertEqual(payload["expense_total"], "30.00")
+        self.assertEqual(payload["income_total"], "30.00")
+        self.assertEqual(payload["net_total"], "0.00")
+        self.assertEqual(payload["top_expense_account"]["account"], ACCOUNT_BANK_USD)
+        self.assertEqual(payload["top_income_account"]["account"], ACCOUNT_REVOLUT_EUR)
+        self.assertEqual(
+            [item["account"] for item in payload["expense_by_account"]],
+            [ACCOUNT_BANK_USD, ACCOUNT_ALIPAY_CNY],
+        )
+        self.assertNotIn("totals_by_currency", payload)
 
     def test_reports_cover_day_week_month_and_year(self) -> None:
         self.seed_cny_entries()
@@ -606,6 +799,139 @@ class TestBookkeepingCli(CliTestCase):
         self.assertEqual(payload["entry"]["account"], ACCOUNT_WECHAT_CNY)
         self.assertIsNone(payload["entry"]["note"])
 
+    def test_update_entry_validation_paths(self) -> None:
+        self.run_cli("set-categories", "--replace", "daily")
+        self.run_cli("set-accounts", "--replace", "\u652f\u4ed8\u5b9d")
+
+        code, payload, _ = self.run_cli(
+            "record",
+            "--amount",
+            "10",
+            "--category",
+            "daily",
+            "--account",
+            "\u652f\u4ed8\u5b9d",
+            "--description",
+            "tea",
+            "--date",
+            "2026-03-15",
+            "--strict-category",
+            "--strict-account",
+        )
+        self.assertEqual(code, 0, payload)
+        entry_id = payload["entry"]["id"]
+
+        code, payload, _ = self.run_cli("update-entry", "--id", str(entry_id))
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "Provide at least one field to update.")
+
+        code, payload, _ = self.run_cli("update-entry", "--id", "999", "--amount", "12")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "Entry not found.")
+
+        code, payload, _ = self.run_cli("update-entry", "--id", str(entry_id), "--currency", "USD")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "Currency does not match the selected account.")
+
+        code, payload, _ = self.run_cli("update-entry", "--id", str(entry_id), "--description", "")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "Description is required.")
+
+    def test_update_account_validation_paths(self) -> None:
+        self.run_cli("set-accounts", "--replace", "Wise:USD", "Revolut:EUR")
+
+        code, payload, _ = self.run_cli("update-account", "--name", "Wise:USD")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "Provide at least one field to update.")
+
+        code, payload, _ = self.run_cli("update-account", "--name", "Wise:USD", "--new-name", "Wise", "--currency", "USD")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "Provide at least one changed field to update.")
+
+        code, payload, _ = self.run_cli("update-account", "--name", "Wise:USD", "--new-name", "Revolut", "--currency", "EUR")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "Account already exists.")
+        self.assertEqual(payload["target_account"], ACCOUNT_REVOLUT_EUR)
+
+    def test_update_recurring_validation_paths(self) -> None:
+        self.run_cli("set-categories", "--replace", "daily")
+        self.run_cli("set-accounts", "--replace", "\u652f\u4ed8\u5b9d")
+
+        code, payload, _ = self.run_cli(
+            "add-recurring",
+            "--amount",
+            "30",
+            "--category",
+            "daily",
+            "--account",
+            "\u652f\u4ed8\u5b9d",
+            "--description",
+            "snacks",
+            "--frequency",
+            "monthly",
+            "--next-date",
+            "2026-04-01",
+            "--strict-category",
+            "--strict-account",
+        )
+        self.assertEqual(code, 0, payload)
+        recurring_id = payload["recurring_transaction"]["id"]
+
+        code, payload, _ = self.run_cli("update-recurring", "--id", str(recurring_id))
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "Provide at least one field to update.")
+
+        code, payload, _ = self.run_cli("update-recurring", "--id", str(recurring_id), "--currency", "USD")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "Currency does not match the selected account.")
+
+        code, payload, _ = self.run_cli("update-recurring", "--id", "999", "--description", "missing")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "Recurring transaction not found.")
+
+    def test_update_recurring_activate_and_deactivate_cycle(self) -> None:
+        self.run_cli("set-categories", "--replace", "daily")
+        self.run_cli("set-accounts", "--replace", "\u652f\u4ed8\u5b9d")
+
+        code, payload, _ = self.run_cli(
+            "add-recurring",
+            "--amount",
+            "30",
+            "--category",
+            "daily",
+            "--account",
+            "\u652f\u4ed8\u5b9d",
+            "--description",
+            "snacks",
+            "--frequency",
+            "monthly",
+            "--next-date",
+            "2026-04-01",
+            "--strict-category",
+            "--strict-account",
+        )
+        self.assertEqual(code, 0, payload)
+        recurring_id = payload["recurring_transaction"]["id"]
+
+        code, payload, _ = self.run_cli("update-recurring", "--id", str(recurring_id), "--deactivate")
+        self.assertEqual(code, 0)
+        self.assertIn("deactivate", payload["updated_fields"])
+        self.assertFalse(payload["recurring_transaction"]["is_active"])
+
+        code, payload, _ = self.run_cli("list-recurring")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["recurring_transactions"], [])
+
+        code, payload, _ = self.run_cli("update-recurring", "--id", str(recurring_id), "--activate")
+        self.assertEqual(code, 0)
+        self.assertIn("activate", payload["updated_fields"])
+        self.assertTrue(payload["recurring_transaction"]["is_active"])
+
+        code, payload, _ = self.run_cli("list-recurring")
+        self.assertEqual(code, 0)
+        self.assertEqual(len(payload["recurring_transactions"]), 1)
+        self.assertEqual(payload["recurring_transactions"][0]["description"], "snacks")
+
     def test_delete_category_and_account_do_not_rewrite_historical_entries(self) -> None:
         self.run_cli("set-categories", "--replace", "daily")
         self.run_cli("set-accounts", "--replace", "\u652f\u4ed8\u5b9d")
@@ -669,6 +995,49 @@ class TestBookkeepingCli(CliTestCase):
         self.assertEqual(code, 1)
         self.assertEqual(payload["error"], "No entries available to delete.")
 
+    def test_repeat_deletions_fail_cleanly(self) -> None:
+        self.run_cli("set-categories", "--replace", "daily")
+        self.run_cli("set-accounts", "--replace", "\u652f\u4ed8\u5b9d")
+
+        code, payload, _ = self.run_cli(
+            "add-recurring",
+            "--amount",
+            "20",
+            "--category",
+            "daily",
+            "--account",
+            "\u652f\u4ed8\u5b9d",
+            "--description",
+            "coffee",
+            "--frequency",
+            "monthly",
+            "--next-date",
+            "2026-04-01",
+            "--strict-category",
+            "--strict-account",
+        )
+        self.assertEqual(code, 0, payload)
+        recurring_id = payload["recurring_transaction"]["id"]
+
+        code, payload, _ = self.run_cli("delete-recurring", "--id", str(recurring_id))
+        self.assertEqual(code, 0, payload)
+
+        code, payload, _ = self.run_cli("delete-recurring", "--id", str(recurring_id))
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "Recurring transaction is already inactive.")
+
+        code, payload, _ = self.run_cli("list-recurring", "--all")
+        self.assertEqual(code, 0)
+        self.assertEqual(len(payload["recurring_transactions"]), 1)
+        self.assertFalse(payload["recurring_transactions"][0]["is_active"])
+
+        code, payload, _ = self.run_cli("delete-account", "--name", "\u652f\u4ed8\u5b9d")
+        self.assertEqual(code, 0, payload)
+
+        code, payload, _ = self.run_cli("delete-account", "--name", "\u652f\u4ed8\u5b9d")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "Account is already inactive.")
+
     def test_validation_failures_return_json_errors(self) -> None:
         code, payload, _ = self.run_cli("list-transactions", "--week", "2026-W99")
         self.assertEqual(code, 1)
@@ -709,6 +1078,10 @@ class TestBookkeepingCli(CliTestCase):
         code, payload, _ = self.run_cli("record", "--amount", "10", "--account", "\u652f\u4ed8\u5b9d", "--currency", "USD", "--description", "bad_currency", "--strict-account")
         self.assertEqual(code, 1)
         self.assertEqual(payload["error"], "Currency does not match the selected account.")
+
+        code, payload, _ = self.run_cli("recent-transactions", "--limit", "0")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "Limit must be greater than zero.")
 
 
 if __name__ == "__main__":
