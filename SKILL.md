@@ -21,6 +21,7 @@ Interpret the user's Chinese prompt, map it to a structured record or query, and
 - Default database path: `~/.money_tracker/bookkeeping.db`
 - Allow override with `--db` or the `MONEY_TRACKER_DB` environment variable.
 - The bundled script also accepts the legacy `LOCAL_BOOKKEEPING_DB` environment variable and can fall back to the legacy `~/.local-bookkeeping/bookkeeping.db` path when needed.
+- Day, week, month, and year report commands do not perform FX conversion; mixed-currency periods are reported as raw stored amounts.
 - For extra Chinese prompt examples, load `{baseDir}/references/chat_reference.md` only when needed.
 
 ## Intent Routing
@@ -87,6 +88,7 @@ When the user asks to record a transaction:
 - Custom wallets are allowed, for example `Wise:USD`, `Revolut:EUR`, or `PayPal:USD`.
 - Use `list-accounts` to inspect the active wallet set.
 - Use `account-balances` when the user asks about balances by wallet or totals by currency.
+- For questions about current holdings such as "how much USD do I have now", prefer `account-balances` over a period report.
 - Use `set-accounts --replace` when the user wants to reset the whole active wallet set.
 - Use `set-accounts` without `--replace` when the user wants to re-enable or add more wallets while preserving existing ones.
 - Use `update-account --name <wallet:currency> ...` when the user wants to rename a wallet or change its configured currency.
@@ -114,9 +116,11 @@ When the user asks to manage recurring transactions:
    - `next_due_on`: use `YYYY-MM-DD`
 2. For creation, run `add-recurring ...`.
 3. For listing schedules, run `list-recurring`.
-4. If the user wants to see only items due by a specific date, run `list-recurring --due-by YYYY-MM-DD`.
-5. For updates, require an id and run `update-recurring --id <id> ...`.
-6. For deletion, require an id and run `delete-recurring --id <id>`.
+4. If the user wants to include inactive schedules too, run `list-recurring --all`.
+5. If the user wants to see only items due by a specific date, run `list-recurring --due-by YYYY-MM-DD`.
+6. For updates, require an id and run `update-recurring --id <id> ...`.
+7. For explicit activation or deactivation, use `update-recurring --id <id> --activate` or `update-recurring --id <id> --deactivate`.
+8. For deletion-style wording, require an id and run `delete-recurring --id <id>` as a deactivation shortcut.
 
 Example prompts:
 
@@ -164,6 +168,8 @@ For day, week, month, or year totals or analysis:
    - `top_expense_category` for the largest spending category
    - `expense_by_account` for which account handled the spending
    - `top_expense_account` for the most-used spending account in the selected period
+4. If the selected period contains more than one currency, explicitly say the totals are raw stored amounts and no FX conversion was applied.
+5. For "how much money do I have now by currency" questions, do not use these period report commands; use `account-balances` instead.
 
 Example prompts:
 
@@ -243,6 +249,7 @@ Main commands:
 - `python "{baseDir}/scripts/bookkeeping.py" list-categories`
 - `python "{baseDir}/scripts/bookkeeping.py" list-accounts`
 - `python "{baseDir}/scripts/bookkeeping.py" account-balances`
+- `python "{baseDir}/scripts/bookkeeping.py" account-balances --currency USD`
 - `python "{baseDir}/scripts/bookkeeping.py" set-categories --replace 日常 学习 电器`
 - `python "{baseDir}/scripts/bookkeeping.py" set-accounts --replace 支付宝:CNY 微信:CNY 银行卡:CNY 银行卡:USD 银行卡:EUR`
 - `python "{baseDir}/scripts/bookkeeping.py" update-account --name Wise:USD --new-name TravelCard --currency EUR`
@@ -250,6 +257,7 @@ Main commands:
 - `python "{baseDir}/scripts/bookkeeping.py" record --amount 10 --category 日常 --account 支付宝 --description 奶茶 --date 2026-03-15 --source-text "我喝奶茶用了10元" --strict-category --strict-account`
 - `python "{baseDir}/scripts/bookkeeping.py" record --amount 12 --category 订阅 --account 银行卡:USD --description Claude --date 2026-03-15 --strict-account`
 - `python "{baseDir}/scripts/bookkeeping.py" add-recurring --amount 3000 --category 日常 --account 银行卡:CNY --description 房租 --frequency monthly --next-date 2026-04-01 --strict-category --strict-account`
+- `python "{baseDir}/scripts/bookkeeping.py" list-recurring --all`
 - `python "{baseDir}/scripts/bookkeeping.py" list-recurring --due-by 2026-04-30`
 - `python "{baseDir}/scripts/bookkeeping.py" day-report --date 2026-03-15`
 - `python "{baseDir}/scripts/bookkeeping.py" week-report --week 2026-W11`
@@ -262,6 +270,8 @@ Main commands:
 - `python "{baseDir}/scripts/bookkeeping.py" latest-entry`
 - `python "{baseDir}/scripts/bookkeeping.py" update-entry --id 1 --amount 12 --category 学习 --account 微信 --description 奶茶教材 --strict-category --strict-account`
 - `python "{baseDir}/scripts/bookkeeping.py" update-recurring --id 1 --account 银行卡:USD --next-date 2026-05-01 --strict-account`
+- `python "{baseDir}/scripts/bookkeeping.py" update-recurring --id 1 --deactivate`
+- `python "{baseDir}/scripts/bookkeeping.py" update-recurring --id 1 --activate`
 - `python "{baseDir}/scripts/bookkeeping.py" delete-entry --id 3`
 - `python "{baseDir}/scripts/bookkeeping.py" delete-latest-entry`
 - `python "{baseDir}/scripts/bookkeeping.py" delete-category --name 旅行`
@@ -274,5 +284,6 @@ Main commands:
 - When recording an entry, mention the exact date used.
 - When answering an account balance query, mention both the wallet balances and the grouped totals by currency when relevant.
 - When answering a day, week, month, or year query, mention the exact period used.
+- When a report period contains more than one currency, say plainly that the totals are raw amounts and no FX conversion was applied.
 - If the script reports an unmatched category or unmatched account, say so plainly and suggest updating the active sets if needed.
 - If the database is empty for the requested period, state that directly.

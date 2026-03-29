@@ -11,6 +11,7 @@
   2. `MONEY_TRACKER_DB`
   3. `LOCAL_BOOKKEEPING_DB` (legacy compatibility)
   4. default home-directory path
+- Day, week, month, and year reports do not perform FX conversion
 - For extra prompt examples, see `{baseDir}/references/chat_reference.md`
 
 ## Command Summary
@@ -60,6 +61,8 @@ Key output fields:
 
 - `accounts`
 - `totals_by_currency`
+
+Use this command for current holdings by wallet and by currency.
 
 ### Set categories
 
@@ -143,6 +146,7 @@ List recurring schedules:
 
 ```bash
 python "{baseDir}/scripts/bookkeeping.py" list-recurring
+python "{baseDir}/scripts/bookkeeping.py" list-recurring --all
 python "{baseDir}/scripts/bookkeeping.py" list-recurring --due-by 2026-04-30
 python "{baseDir}/scripts/bookkeeping.py" list-recurring --account 支付宝 --frequency monthly
 python "{baseDir}/scripts/bookkeeping.py" list-recurring --account 银行卡:USD --frequency monthly
@@ -152,6 +156,13 @@ Update one recurring schedule:
 
 ```bash
 python "{baseDir}/scripts/bookkeeping.py" update-recurring --id 1 --account 银行卡:USD --next-date 2026-05-01 --strict-account
+```
+
+Additional activate or deactivate examples:
+
+```bash
+python "{baseDir}/scripts/bookkeeping.py" update-recurring --id 1 --deactivate
+python "{baseDir}/scripts/bookkeeping.py" update-recurring --id 1 --activate
 ```
 
 Deactivate one recurring schedule:
@@ -195,8 +206,12 @@ Key output fields:
 - `expense_by_account`
 - `income_by_account`
 - `top_expense_category`
+- `top_income_category`
 - `top_expense_account`
+- `top_income_account`
 - `entry_count`
+
+These report commands return raw stored amounts. They do not add `totals_by_currency` and they do not convert between currencies.
 
 ### List transactions for one date, ISO week, month, or year
 
@@ -284,5 +299,6 @@ When a user says `记账 <prompt>`:
   - end: exclusive end date for the next day, next ISO week, next month, or next year
 - Category reports group by the saved category snapshot so historical entries remain readable even if the active category list changes later.
 - Account reports group by the saved wallet snapshot, including currency, so historical entries remain readable even if the active wallet list changes later.
+- Period report totals are raw stored amounts. A mixed-currency month such as `10 CNY + 20 USD` is reported as `30.00`, not as a converted value.
 - `update-account` rewrites the linked entry and recurring snapshots, plus their currencies, to match the updated wallet definition.
 - Recurring transactions are stored as schedules; they do not auto-create normal entries unless the caller decides to record them separately.
