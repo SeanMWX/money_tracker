@@ -1,6 +1,6 @@
 ---
 name: money_tracker
-description: 本地 SQLite 记账 skill。用于处理中文自然语言记账、查账、分类管理、账户管理、周期性交易管理、最近账单查询、修改账单和删除账单请求，例如“记账 我喝奶茶用了10元”“用支付宝记一笔午饭 25 元”“添加周期性支出 每月 1 号交房租 3000 用银行卡”“显示这周花了多少”“列出 2026-03-15 的账单”。支持用户预定义分类、账户选择、按日周月年统计、分类与账户占比分析、交易明细查询和账单维护。
+description: 本地 SQLite 记账 skill。用于处理中文自然语言记账、查账、分类管理、钱包账户管理、账户余额查询、周期性交易管理、最近账单查询、修改账单和删除账单请求，例如“记账 我喝奶茶用了10元”“用支付宝记一笔午饭 25 元”“显示所有账户余额”“我现在还有多少美元”“添加周期性支出 每月 1 号交房租 3000 用银行卡”“列出 2026-03-15 的账单”。支持用户预定义分类、钱包加币种账户、按日周月年统计、分类与账户占比分析、交易明细查询和账单维护。
 ---
 
 # money_tracker
@@ -29,15 +29,16 @@ Route the user's request into one of these flows:
 
 1. `记账 ...` or other natural-language add-entry requests
 2. Category management such as setting, replacing, adding, listing, or deleting categories
-3. Account management such as listing, enabling, resetting, or deleting accounts like `现金`, `支付宝`, `微信`, `银行卡`, and `信用卡`
-4. Recurring transaction management such as adding, listing, updating, or deleting periodic payments or income schedules
-5. Day, week, month, or year totals such as `今天花了多少`, `这周花了多少`, `这个月花了多少`, or `今年花了多少`
-6. Day, week, month, or year analysis such as `这周花销哪里更多`, `这个月花销哪里更多`, or `今年收入主要来自哪里`
-7. Day, week, month, or year detail queries such as `列出 2026-03-15 的账单`, `列出这周的账单`, `列出我这个月的账单`, or `列出 2026 年的账单`
-8. Recent transaction queries such as `展示出最新的10个账单`
-9. Latest-entry queries such as `显示最近的一笔账`
-10. Update requests such as `修改一笔账 1 金额为12元，分类为学习`
-11. Deletion requests such as `删除一笔账 3` or `删除最近的一笔账`
+3. Account management such as listing, enabling, resetting, updating, or deleting wallet accounts like `支付宝:CNY`, `微信:CNY`, `银行卡:USD`, or `Wise:EUR`
+4. Account balance queries such as `显示所有账户余额`, `列出每个钱包余额`, `我现在还有多少美元`, or `我的欧元钱包还有多少`
+5. Recurring transaction management such as adding, listing, updating, or deleting periodic payments or income schedules
+6. Day, week, month, or year totals such as `今天花了多少`, `这周花了多少`, `这个月花了多少`, or `今年花了多少`
+7. Day, week, month, or year analysis such as `这周花销哪里更多`, `这个月花销哪里更多`, or `今年收入主要来自哪里`
+8. Day, week, month, or year detail queries such as `列出 2026-03-15 的账单`, `列出这周的账单`, `列出我这个月的账单`, or `列出 2026 年的账单`
+9. Recent transaction queries such as `展示出最新的10个账单`
+10. Latest-entry queries such as `显示最近的一笔账`
+11. Update requests such as `修改一笔账 1 金额为12元，分类为学习`
+12. Deletion requests such as `删除一笔账 3` or `删除最近的一笔账`
 
 If the user's wording is relative, resolve it into an explicit date, week, month, or year before calling the script. In final answers, mention the exact period used, for example `2026-03-15`, `2026-W11`, `2026-03`, or `2026`.
 
@@ -49,7 +50,7 @@ When the user asks to record a transaction:
    - `entry_type`: default to `expense`; use `income` only when the prompt clearly indicates inflow such as salary, refund, reimbursement, bonus, or revenue.
    - `amount`: parse the positive numeric amount.
    - `occurred_on`: use `YYYY-MM-DD`; default to today if the prompt does not specify a date.
-   - `account`: map to one of the supported accounts such as `现金`, `支付宝`, `微信`, `银行卡`, or `信用卡`; use `未指定账户` only when the user did not specify one.
+   - `account`: map to a wallet account such as `支付宝:CNY`, `微信:CNY`, `银行卡:CNY`, `银行卡:USD`, `银行卡:EUR`, or another wallet like `Wise:USD`; use `未指定账户` only when the user did not specify one.
    - `description`: keep it short and concrete, such as `奶茶`, `英语教材`, `插线板`.
    - `note`: keep extra context only if useful.
    - `source_text`: store the original natural-language prompt when practical.
@@ -76,13 +77,25 @@ When the user asks to record a transaction:
 
 ## Account Rules
 
-- Supported account names are `现金`, `支付宝`, `微信`, `银行卡`, and `信用卡`.
-- Default accounts are seeded automatically when the database is initialized.
-- Use `list-accounts` to inspect the active account set.
-- Use `set-accounts --replace` when the user wants to reset the active account set.
-- Use `set-accounts` without `--replace` when the user wants to re-enable additional accounts while preserving existing ones.
-- If the user specifies an account while recording, updating, or filtering transactions, normalize it to one of the supported account names.
-- For `删除账户 ...`, call `delete-account --name <account>` and treat it as deactivation, not history rewrites.
+- Accounts are wallet-style records with both a wallet name and a currency.
+- Default wallets are seeded automatically when the database is initialized:
+  - `支付宝:CNY`
+  - `微信:CNY`
+  - `银行卡:CNY`
+  - `银行卡:USD`
+  - `银行卡:EUR`
+- Custom wallets are allowed, for example `Wise:USD`, `Revolut:EUR`, or `PayPal:USD`.
+- Use `list-accounts` to inspect the active wallet set.
+- Use `account-balances` when the user asks about balances by wallet or totals by currency.
+- Use `set-accounts --replace` when the user wants to reset the whole active wallet set.
+- Use `set-accounts` without `--replace` when the user wants to re-enable or add more wallets while preserving existing ones.
+- Use `update-account --name <wallet:currency> ...` when the user wants to rename a wallet or change its configured currency.
+- If the user specifies a wallet without a currency:
+  - use the wallet's default currency when one exists, such as `支付宝 -> CNY` or `银行卡 -> CNY`
+  - otherwise require a currency, such as `Wise:USD`
+- When recording or updating an entry, the final entry currency must match the selected wallet currency.
+- `update-account` propagates the new wallet label and currency to linked entries and recurring schedules for consistency.
+- For `删除账户 ...`, call `delete-account --name <wallet:currency>` and treat it as deactivation, not history rewrites.
 
 ## Recurring Workflow
 
@@ -115,6 +128,21 @@ Example prompts:
 - `删除周期性账单 2`
 
 ## Query Workflow
+
+For account balance queries:
+
+1. If the user wants balances by wallet or totals by currency, run `account-balances`.
+2. If the user asks about one currency only, pass `account-balances --currency <CODE>`.
+3. Answer from:
+   - `accounts` for each wallet balance
+   - `totals_by_currency` for grouped totals such as total `CNY`, total `USD`, and total `EUR`
+
+Example prompts:
+
+- `显示所有账户余额`
+- `列出每个钱包余额`
+- `我现在还有多少美元`
+- `我的欧元钱包还有多少`
 
 For day, week, month, or year totals or analysis:
 
@@ -154,7 +182,7 @@ For detail queries:
 
 1. Resolve the target period.
 2. If the user asks for a category filter, load active categories first and pass `--category <name>`.
-3. If the user asks for an account filter, load active accounts first and pass `--account <name>`.
+3. If the user asks for an account filter, load active accounts first and pass `--account <wallet:currency>` when the currency matters.
 4. Run `list-transactions` with exactly one period selector:
    - `--date YYYY-MM-DD`
    - `--week YYYY-Www`
@@ -174,6 +202,7 @@ Example prompts:
 - `列出 2026 年的账单`
 - `列出 2026-03-15 学习分类的账单`
 - `列出 2026-03 的支付宝账单`
+- `列出 2026-03 的银行卡美元账单`
 
 For latest-entry queries:
 
@@ -184,7 +213,7 @@ For recent-entry queries:
 
 1. Parse the requested count; default to `10` if the user asks for `latest` without a number.
 2. If the user asks for a category filter, load active categories first and pass `--category <name>`.
-3. If the user asks for an account filter, load active accounts first and pass `--account <name>`.
+3. If the user asks for an account filter, load active accounts first and pass `--account <wallet:currency>` when the currency matters.
 4. Run `recent-transactions --limit N`.
 
 For updates:
@@ -213,32 +242,37 @@ Main commands:
 - `python "{baseDir}/scripts/bookkeeping.py" init-db`
 - `python "{baseDir}/scripts/bookkeeping.py" list-categories`
 - `python "{baseDir}/scripts/bookkeeping.py" list-accounts`
+- `python "{baseDir}/scripts/bookkeeping.py" account-balances`
 - `python "{baseDir}/scripts/bookkeeping.py" set-categories --replace 日常 学习 电器`
-- `python "{baseDir}/scripts/bookkeeping.py" set-accounts --replace 现金 支付宝 微信 银行卡 信用卡`
+- `python "{baseDir}/scripts/bookkeeping.py" set-accounts --replace 支付宝:CNY 微信:CNY 银行卡:CNY 银行卡:USD 银行卡:EUR`
+- `python "{baseDir}/scripts/bookkeeping.py" update-account --name Wise:USD --new-name TravelCard --currency EUR`
 - `python "{baseDir}/scripts/bookkeeping.py" set-categories 旅行`
 - `python "{baseDir}/scripts/bookkeeping.py" record --amount 10 --category 日常 --account 支付宝 --description 奶茶 --date 2026-03-15 --source-text "我喝奶茶用了10元" --strict-category --strict-account`
-- `python "{baseDir}/scripts/bookkeeping.py" add-recurring --amount 3000 --category 日常 --account 银行卡 --description 房租 --frequency monthly --next-date 2026-04-01 --strict-category --strict-account`
+- `python "{baseDir}/scripts/bookkeeping.py" record --amount 12 --category 订阅 --account 银行卡:USD --description Claude --date 2026-03-15 --strict-account`
+- `python "{baseDir}/scripts/bookkeeping.py" add-recurring --amount 3000 --category 日常 --account 银行卡:CNY --description 房租 --frequency monthly --next-date 2026-04-01 --strict-category --strict-account`
 - `python "{baseDir}/scripts/bookkeeping.py" list-recurring --due-by 2026-04-30`
 - `python "{baseDir}/scripts/bookkeeping.py" day-report --date 2026-03-15`
 - `python "{baseDir}/scripts/bookkeeping.py" week-report --week 2026-W11`
 - `python "{baseDir}/scripts/bookkeeping.py" month-report --month 2026-03`
 - `python "{baseDir}/scripts/bookkeeping.py" year-report --year 2026`
 - `python "{baseDir}/scripts/bookkeeping.py" list-transactions --date 2026-03-15 --account 支付宝`
+- `python "{baseDir}/scripts/bookkeeping.py" list-transactions --month 2026-03 --account 银行卡:USD`
 - `python "{baseDir}/scripts/bookkeeping.py" list-transactions --month 2026-03`
 - `python "{baseDir}/scripts/bookkeeping.py" recent-transactions --limit 10 --account 微信`
 - `python "{baseDir}/scripts/bookkeeping.py" latest-entry`
-- `python "{baseDir}/scripts/bookkeeping.py" update-entry --id 1 --amount 12 --category 学习 --account 信用卡 --description 奶茶教材 --strict-category --strict-account`
-- `python "{baseDir}/scripts/bookkeeping.py" update-recurring --id 1 --account 信用卡 --next-date 2026-05-01 --strict-account`
+- `python "{baseDir}/scripts/bookkeeping.py" update-entry --id 1 --amount 12 --category 学习 --account 微信 --description 奶茶教材 --strict-category --strict-account`
+- `python "{baseDir}/scripts/bookkeeping.py" update-recurring --id 1 --account 银行卡:USD --next-date 2026-05-01 --strict-account`
 - `python "{baseDir}/scripts/bookkeeping.py" delete-entry --id 3`
 - `python "{baseDir}/scripts/bookkeeping.py" delete-latest-entry`
 - `python "{baseDir}/scripts/bookkeeping.py" delete-category --name 旅行`
-- `python "{baseDir}/scripts/bookkeeping.py" delete-account --name 微信`
+- `python "{baseDir}/scripts/bookkeeping.py" delete-account --name 银行卡:USD`
 - `python "{baseDir}/scripts/bookkeeping.py" delete-recurring --id 2`
 
 ## Response Rules
 
 - Keep the user-facing response concise.
 - When recording an entry, mention the exact date used.
+- When answering an account balance query, mention both the wallet balances and the grouped totals by currency when relevant.
 - When answering a day, week, month, or year query, mention the exact period used.
 - If the script reports an unmatched category or unmatched account, say so plainly and suggest updating the active sets if needed.
 - If the database is empty for the requested period, state that directly.

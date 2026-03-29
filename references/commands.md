@@ -40,7 +40,26 @@ python "{baseDir}/scripts/bookkeeping.py" list-accounts
 python "{baseDir}/scripts/bookkeeping.py" list-accounts --all
 ```
 
-Default supported accounts are seeded automatically when the database is initialized.
+Default wallet accounts are seeded automatically when the database is initialized:
+
+- `支付宝:CNY`
+- `微信:CNY`
+- `银行卡:CNY`
+- `银行卡:USD`
+- `银行卡:EUR`
+
+### Show account balances
+
+```bash
+python "{baseDir}/scripts/bookkeeping.py" account-balances
+python "{baseDir}/scripts/bookkeeping.py" account-balances --currency USD
+python "{baseDir}/scripts/bookkeeping.py" account-balances --all
+```
+
+Key output fields:
+
+- `accounts`
+- `totals_by_currency`
 
 ### Set categories
 
@@ -61,14 +80,30 @@ python "{baseDir}/scripts/bookkeeping.py" set-categories 旅行
 Replace the active set:
 
 ```bash
-python "{baseDir}/scripts/bookkeeping.py" set-accounts --replace 现金 支付宝 微信 银行卡 信用卡
+python "{baseDir}/scripts/bookkeeping.py" set-accounts --replace 支付宝:CNY 微信:CNY 银行卡:CNY 银行卡:USD 银行卡:EUR
 ```
 
-Re-enable or add supported accounts without removing other active ones:
+Re-enable or add wallet accounts without removing other active ones:
 
 ```bash
-python "{baseDir}/scripts/bookkeeping.py" set-accounts 支付宝 信用卡
+python "{baseDir}/scripts/bookkeeping.py" set-accounts Wise:USD Revolut:EUR
 ```
+
+### Update one account
+
+Rename a wallet or change its configured currency:
+
+```bash
+python "{baseDir}/scripts/bookkeeping.py" update-account --name Wise:USD --new-name TravelCard
+python "{baseDir}/scripts/bookkeeping.py" update-account --name Wise:USD --new-name TravelCard --currency EUR
+```
+
+Notes:
+
+- `--name` identifies the existing wallet; provide `wallet:currency` when the wallet name is ambiguous
+- `--new-name` changes the wallet name
+- `--currency` changes the wallet currency
+- Linked entries and recurring schedules are rewritten to the updated wallet label and currency for consistency
 
 ### Record one transaction
 
@@ -82,13 +117,14 @@ Income example:
 
 ```bash
 python "{baseDir}/scripts/bookkeeping.py" record --type income --amount 5000 --category 工资 --account 银行卡 --description 工资到账 --date 2026-03-01 --source-text "这个月工资到账5000元" --strict-account
+python "{baseDir}/scripts/bookkeeping.py" record --amount 12 --category 订阅 --account 银行卡:USD --description Claude --date 2026-03-15 --strict-account
 ```
 
 Notes:
 
 - `--type` defaults to `expense`
 - `--date` defaults to today
-- `--currency` defaults to `CNY`
+- `--currency` defaults to the selected wallet currency or `CNY` when no wallet currency is available
 - `--category` defaults to `未分类`
 - `--account` defaults to `未指定账户`
 - `--strict-category` fails if the category is not an active predefined category
@@ -99,8 +135,8 @@ Notes:
 Add one recurring transaction schedule:
 
 ```bash
-python "{baseDir}/scripts/bookkeeping.py" add-recurring --amount 3000 --category 日常 --account 银行卡 --description 房租 --frequency monthly --next-date 2026-04-01 --strict-category --strict-account
-python "{baseDir}/scripts/bookkeeping.py" add-recurring --type income --amount 5000 --category 工资 --account 银行卡 --description 工资到账 --frequency monthly --next-date 2026-04-01 --strict-account
+python "{baseDir}/scripts/bookkeeping.py" add-recurring --amount 3000 --category 日常 --account 银行卡:CNY --description 房租 --frequency monthly --next-date 2026-04-01 --strict-category --strict-account
+python "{baseDir}/scripts/bookkeeping.py" add-recurring --type income --amount 5000 --category 工资 --account Wise:USD --description 工资到账 --frequency monthly --next-date 2026-04-01 --strict-account
 ```
 
 List recurring schedules:
@@ -109,12 +145,13 @@ List recurring schedules:
 python "{baseDir}/scripts/bookkeeping.py" list-recurring
 python "{baseDir}/scripts/bookkeeping.py" list-recurring --due-by 2026-04-30
 python "{baseDir}/scripts/bookkeeping.py" list-recurring --account 支付宝 --frequency monthly
+python "{baseDir}/scripts/bookkeeping.py" list-recurring --account 银行卡:USD --frequency monthly
 ```
 
 Update one recurring schedule:
 
 ```bash
-python "{baseDir}/scripts/bookkeeping.py" update-recurring --id 1 --account 信用卡 --next-date 2026-05-01 --strict-account
+python "{baseDir}/scripts/bookkeeping.py" update-recurring --id 1 --account 银行卡:USD --next-date 2026-05-01 --strict-account
 ```
 
 Deactivate one recurring schedule:
@@ -171,6 +208,7 @@ python "{baseDir}/scripts/bookkeeping.py" list-transactions --year 2026
 python "{baseDir}/scripts/bookkeeping.py" list-transactions --month 2026-03 --type expense --limit 20
 python "{baseDir}/scripts/bookkeeping.py" list-transactions --month 2026-03 --category 学习 --limit 20
 python "{baseDir}/scripts/bookkeeping.py" list-transactions --month 2026-03 --account 支付宝 --limit 20
+python "{baseDir}/scripts/bookkeeping.py" list-transactions --month 2026-03 --account 银行卡:USD --limit 20
 ```
 
 ### Recent transactions
@@ -180,6 +218,7 @@ python "{baseDir}/scripts/bookkeeping.py" recent-transactions
 python "{baseDir}/scripts/bookkeeping.py" recent-transactions --limit 10
 python "{baseDir}/scripts/bookkeeping.py" recent-transactions --limit 10 --category 学习
 python "{baseDir}/scripts/bookkeeping.py" recent-transactions --limit 10 --account 微信
+python "{baseDir}/scripts/bookkeeping.py" recent-transactions --limit 10 --account Wise:USD
 ```
 
 ### Show the latest transaction
@@ -191,7 +230,8 @@ python "{baseDir}/scripts/bookkeeping.py" latest-entry
 ### Update one transaction
 
 ```bash
-python "{baseDir}/scripts/bookkeeping.py" update-entry --id 1 --amount 12 --category 学习 --account 信用卡 --description 奶茶教材 --strict-category --strict-account
+python "{baseDir}/scripts/bookkeeping.py" update-entry --id 1 --amount 12 --category 学习 --account 微信 --description 奶茶教材 --strict-category --strict-account
+python "{baseDir}/scripts/bookkeeping.py" update-entry --id 1 --account 银行卡:USD --strict-account
 ```
 
 Use this when the user wants to fix amount, category, description, note, date, type, currency, or the original prompt text.
@@ -217,7 +257,7 @@ python "{baseDir}/scripts/bookkeeping.py" delete-category --name 旅行
 ### Delete one account
 
 ```bash
-python "{baseDir}/scripts/bookkeeping.py" delete-account --name 微信
+python "{baseDir}/scripts/bookkeeping.py" delete-account --name 银行卡:USD
 ```
 
 ## Classification Guidance
@@ -230,7 +270,7 @@ When a user says `记账 <prompt>`:
 4. Read active categories.
 5. Read active accounts when the payment method matters.
 6. Map the transaction to the closest active category.
-7. Map the payment method to one of `现金`, `支付宝`, `微信`, `银行卡`, or `信用卡`.
+7. Map the payment method to a wallet account such as `支付宝:CNY`, `微信:CNY`, `银行卡:CNY`, `银行卡:USD`, `银行卡:EUR`, or a custom wallet like `Wise:USD`.
 8. If the mapping is weak, ask one question instead of inventing a category or account.
 9. Use `未分类` or `未指定账户` only as intentional fallbacks.
 
@@ -243,5 +283,6 @@ When a user says `记账 <prompt>`:
   - start: inclusive start date for the day, ISO week, month, or year
   - end: exclusive end date for the next day, next ISO week, next month, or next year
 - Category reports group by the saved category snapshot so historical entries remain readable even if the active category list changes later.
-- Account reports group by the saved account snapshot so historical entries remain readable even if the active account list changes later.
+- Account reports group by the saved wallet snapshot, including currency, so historical entries remain readable even if the active wallet list changes later.
+- `update-account` rewrites the linked entry and recurring snapshots, plus their currencies, to match the updated wallet definition.
 - Recurring transactions are stored as schedules; they do not auto-create normal entries unless the caller decides to record them separately.

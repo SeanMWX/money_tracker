@@ -14,6 +14,10 @@ TEST_DIR = Path(__file__).resolve().parent
 BOOKKEEPING_SCRIPT = REPO_ROOT / "scripts" / "bookkeeping.py"
 DEFAULT_DB_PATH = TEST_DIR / "data" / "smoke_test.db"
 
+ACCOUNT_ALIPAY_CNY = "\u652f\u4ed8\u5b9d (CNY)"
+ACCOUNT_BANK_USD = "\u94f6\u884c\u5361 (USD)"
+ACCOUNT_TRAVELCARD_EUR = "TravelCard (EUR)"
+
 
 def resolve_test_db() -> Path:
     raw_value = os.environ.get("MONEY_TRACKER_TEST_DB")
@@ -63,14 +67,14 @@ def main() -> int:
     init_payload = run_command(db_path, "init-db")
     expect(init_payload["ok"], "init-db did not return ok=true")
     expect(init_payload["db_path"] == str(db_path), "init-db used the wrong database path")
-    expect(init_payload["active_account_count"] >= 5, "init-db did not seed default accounts")
+    expect(init_payload["active_account_count"] == 5, "init-db did not seed the expected default wallets")
 
-    categories_payload = run_command(db_path, "set-categories", "--replace", "daily", "study")
+    categories_payload = run_command(db_path, "set-categories", "--replace", "daily", "salary")
     active_names = [item["name"] for item in categories_payload["categories"] if item["is_active"]]
-    expect(active_names == ["daily", "study"], f"unexpected categories: {active_names}")
+    expect(active_names == ["daily", "salary"], f"unexpected categories: {active_names}")
 
     accounts_payload = run_command(db_path, "list-accounts")
-    expect("现金" in accounts_payload["active_account_names"], "default accounts were not available")
+    expect(ACCOUNT_ALIPAY_CNY in accounts_payload["active_account_labels"], "default wallets were not available")
 
     record_payload = run_command(
         db_path,
@@ -80,7 +84,7 @@ def main() -> int:
         "--category",
         "daily",
         "--account",
-        "cash",
+        "\u652f\u4ed8\u5b9d",
         "--description",
         "tea",
         "--date",
@@ -91,20 +95,35 @@ def main() -> int:
         "--strict-account",
     )
     expect(record_payload["entry"]["category"] == "daily", "record did not use the expected category")
-    expect(record_payload["entry"]["account"] == "现金", "record did not normalize the expected account")
+    expect(record_payload["entry"]["account"] == ACCOUNT_ALIPAY_CNY, "record did not normalize the expected wallet")
+    expect(record_payload["entry"]["currency"] == "CNY", "record did not use the expected wallet currency")
     expect(record_payload["entry"]["amount"] == "10.00", "record did not persist the expected amount")
+
+    set_accounts_payload = run_command(
+        db_path,
+        "set-accounts",
+        "--replace",
+        "\u652f\u4ed8\u5b9d",
+        "\u94f6\u884c\u5361:USD",
+    )
+    expect(
+        [item["label"] for item in set_accounts_payload["accounts"]] == [ACCOUNT_ALIPAY_CNY, ACCOUNT_BANK_USD],
+        "set-accounts did not activate the expected wallets",
+    )
 
     recurring_payload = run_command(
         db_path,
         "add-recurring",
+        "--type",
+        "income",
         "--amount",
         "50",
         "--category",
-        "daily",
+        "salary",
         "--account",
-        "alipay",
+        "\u94f6\u884c\u5361:USD",
         "--description",
-        "phone_bill",
+        "weekly_bonus",
         "--frequency",
         "monthly",
         "--next-date",
@@ -112,12 +131,31 @@ def main() -> int:
         "--strict-category",
         "--strict-account",
     )
-    expect(recurring_payload["recurring_transaction"]["account"] == "支付宝", "recurring account mismatch")
+    expect(recurring_payload["recurring_transaction"]["account"] == ACCOUNT_BANK_USD, "recurring wallet mismatch")
+    expect(recurring_payload["recurring_transaction"]["currency"] == "USD", "recurring currency mismatch")
     expect(recurring_payload["recurring_transaction"]["frequency"] == "monthly", "recurring frequency mismatch")
+
+    update_account_payload = run_command(
+        db_path,
+        "update-account",
+        "--name",
+        "\u94f6\u884c\u5361:USD",
+        "--new-name",
+        "TravelCard",
+        "--currency",
+        "EUR",
+    )
+    expect(update_account_payload["account"]["label"] == ACCOUNT_TRAVELCARD_EUR, "update-account wallet label mismatch")
+    expect(update_account_payload["linked_recurring_transaction_count"] == 1, "update-account recurring propagation mismatch")
+
+    balances_payload = run_command(db_path, "account-balances")
+    totals = {item["currency"]: item["balance"] for item in balances_payload["totals_by_currency"]}
+    expect(totals["CNY"] == "-10.00", "CNY wallet totals mismatch after replace")
+    expect(totals["EUR"] == "0.00", "EUR wallet totals mismatch after update-account")
 
     report_payload = run_command(db_path, "month-report", "--month", "2026-03")
     expect(report_payload["expense_total"] == "10.00", "month-report expense_total mismatch")
-    expect(report_payload["top_expense_account"]["account"] == "现金", "month-report account breakdown mismatch")
+    expect(report_payload["top_expense_account"]["account"] == ACCOUNT_ALIPAY_CNY, "month-report wallet breakdown mismatch")
 
     day_payload = run_command(db_path, "day-report", "--date", "2026-03-15")
     expect(day_payload["expense_total"] == "10.00", "day-report expense_total mismatch")
@@ -130,11 +168,15 @@ def main() -> int:
     latest_payload = run_command(db_path, "latest-entry")
     expect(latest_payload["entry"]["description"] == "tea", "latest-entry description mismatch")
 
-    recent_payload = run_command(db_path, "recent-transactions", "--account", "cash", "--limit", "5")
+    recent_payload = run_command(db_path, "recent-transactions", "--account", "\u652f\u4ed8\u5b9d", "--limit", "5")
     expect(len(recent_payload["entries"]) == 1, "recent-transactions entry count mismatch")
 
     recurring_list_payload = run_command(db_path, "list-recurring", "--due-by", "2026-04-30")
     expect(len(recurring_list_payload["recurring_transactions"]) == 1, "list-recurring count mismatch")
+    expect(
+        recurring_list_payload["recurring_transactions"][0]["account"] == ACCOUNT_TRAVELCARD_EUR,
+        "list-recurring wallet label mismatch after update-account",
+    )
 
     print("[OK] Smoke test passed.")
     return 0

@@ -32,7 +32,9 @@ The repository root itself is the skill root.
 
 - Records expenses and income from Chinese natural-language prompts
 - Manages user-defined categories
-- Supports user accounts such as cash, Alipay, WeChat, bank cards, and credit cards
+- Supports wallet-style accounts such as Alipay, WeChat, bank cards, and custom wallets with explicit currencies
+- Shows wallet balances and grouped currency totals such as total CNY, total USD, and total EUR
+- Supports adding, updating, and deleting wallet definitions
 - Tracks recurring transactions as a schedule table for periodic payments or income
 - Answers daily, weekly, monthly, and yearly totals, category breakdowns, period details, recent transactions, and latest-entry queries
 - Supports updating and deleting saved entries
@@ -58,8 +60,12 @@ OpenClaw loads skills from skill directories. To install this skill manually:
 
 - `记账 我喝奶茶用了10元`
 - `用支付宝记一笔午饭 25 元`
+- `用银行卡美元记一笔订阅 12`
 - `把分类设置为日常、学习、电器`
 - `列出所有账户`
+- `显示所有账户余额`
+- `我现在还有多少美元`
+- `把 Wise:USD 改成 TravelCard:EUR`
 - `添加周期性支出 每月 1 号交房租 3000 用银行卡`
 - `显示这周花了多少`
 - `显示我这个月的账单是多少`

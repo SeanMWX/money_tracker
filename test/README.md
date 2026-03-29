@@ -32,9 +32,9 @@ The smoke test and CLI tests use databases under `test/data/` by default and do 
 The full suite covers these script-facing capabilities:
 
 - Database initialization
-- Default account seeding plus account listing, reset, and deactivation
+- Default wallet seeding plus account listing, reset, updates, deactivation, and per-currency balance queries
 - Category creation, replacement, listing, and deactivation
-- Recording expense and income entries with account selection
+- Recording expense and income entries with wallet selection and wallet-derived currencies
 - Strict-category validation, strict-account validation, and fallback values
 - Daily, weekly, monthly, and yearly reports with category and account breakdowns
 - Recent transactions, latest entry, and period detail listing with account filters
@@ -42,7 +42,7 @@ The full suite covers these script-facing capabilities:
 - Entry updates and deletions
 - Historical category and account snapshot behavior after deactivation
 - Database path resolution precedence and legacy fallback compatibility
-- Validation failures for invalid limits, ids, dates, accounts, categories, and recurring intervals
+- Validation failures for invalid limits, ids, dates, currencies, accounts, categories, and recurring intervals
 
 ## What Is Not Covered Here
 
