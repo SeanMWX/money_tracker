@@ -1,4 +1,5 @@
 skill-creator/
+skill_creator/
 .venv/
 test/.venv/
 test/data/

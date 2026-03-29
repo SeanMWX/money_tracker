@@ -11,7 +11,8 @@ The repository root itself is the skill root.
 |-- SKILL.md
 |-- references/
 |   |-- commands.md
-|   `-- chat_reference.md
+|   |-- chat_reference.md
+|   `-- intent_mapping.md
 |-- scripts/
 |   `-- bookkeeping.py
 `-- test/
@@ -71,6 +72,7 @@ Prompt examples and routing details are maintained in:
 - `SKILL.md` for the main agent workflow
 - `references/commands.md` for exact command shapes
 - `references/chat_reference.md` for extra Chinese prompt examples
+- `references/intent_mapping.md` for a concise user-intent to command mapping table
 
 ## Local Verification
 
