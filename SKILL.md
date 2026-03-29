@@ -1,9 +1,9 @@
 ---
-name: local-bookkeeping
+name: money_tracker
 description: 本地 SQLite 记账与月度消费分析。用于处理中文自然语言记账、查账、分类管理、最近账单查询、修改账单和删除账单请求，例如“记账 我喝奶茶用了10元”“把分类设置为日常、学习、电器”“显示我这个月的账单是多少”“展示出最新的10个账单”“删除最近的一笔账”。支持用户预定义分类、自动分类、本月总额统计、分类占比分析、交易明细查询和账单维护。
 ---
 
-# Local Bookkeeping
+# money_tracker
 
 ## Overview
 
@@ -18,9 +18,10 @@ Interpret the user's Chinese prompt, map it to a structured record or query, and
 - Always reference bundled files via `{baseDir}` so the skill still works when installed under an OpenClaw `skills/` directory.
 - The uploaded runtime only needs `{baseDir}/scripts/bookkeeping.py`.
 - Use the default database path unless the user explicitly wants a custom location.
-- Default database path: `~/.local-bookkeeping/bookkeeping.db`
-- Allow override with `--db` or the `LOCAL_BOOKKEEPING_DB` environment variable.
-- For extra Chinese prompt examples, load `{baseDir}/references/chat-reference.md` only when needed.
+- Default database path: `~/.money_tracker/bookkeeping.db`
+- Allow override with `--db` or the `MONEY_TRACKER_DB` environment variable.
+- The bundled script also accepts the legacy `LOCAL_BOOKKEEPING_DB` environment variable and can fall back to the legacy `~/.local-bookkeeping/bookkeeping.db` path when needed.
+- For extra Chinese prompt examples, load `{baseDir}/references/chat_reference.md` only when needed.
 
 ## Intent Routing
 
@@ -115,7 +116,7 @@ For deletion:
 ## Script Entry Points
 
 Use `{baseDir}/references/commands.md` for exact runtime command shapes.
-Use `{baseDir}/references/chat-reference.md` only when you need extra natural-language prompt examples.
+Use `{baseDir}/references/chat_reference.md` only when you need extra natural-language prompt examples.
 
 Main commands:
 

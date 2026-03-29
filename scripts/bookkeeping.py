@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local bookkeeping helper backed by SQLite."""
+"""money_tracker helper backed by SQLite."""
 
 from __future__ import annotations
 
@@ -14,8 +14,10 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
 MIN_PYTHON = (3, 9)
-DEFAULT_DB_ENV = "LOCAL_BOOKKEEPING_DB"
-DEFAULT_DB_DIR = ".local-bookkeeping"
+DEFAULT_DB_ENV = "MONEY_TRACKER_DB"
+LEGACY_DB_ENV = "LOCAL_BOOKKEEPING_DB"
+DEFAULT_DB_DIR = ".money_tracker"
+LEGACY_DB_DIR = ".local-bookkeeping"
 DEFAULT_DB_NAME = "bookkeeping.db"
 DEFAULT_UNCATEGORIZED = "\u672a\u5206\u7c7b"
 
@@ -36,10 +38,14 @@ def utc_now():
 
 
 def resolve_db_path(raw_path):
-    candidate = raw_path or os.environ.get(DEFAULT_DB_ENV)
+    candidate = raw_path or os.environ.get(DEFAULT_DB_ENV) or os.environ.get(LEGACY_DB_ENV)
     if candidate:
         return Path(candidate).expanduser().resolve()
-    return (Path.home() / DEFAULT_DB_DIR / DEFAULT_DB_NAME).resolve()
+    default_path = (Path.home() / DEFAULT_DB_DIR / DEFAULT_DB_NAME).resolve()
+    legacy_path = (Path.home() / LEGACY_DB_DIR / DEFAULT_DB_NAME).resolve()
+    if default_path.exists() or not legacy_path.exists():
+        return default_path
+    return legacy_path
 
 
 def connect_db(db_path):
@@ -710,7 +716,7 @@ def cmd_delete_latest_entry(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="Local bookkeeping helper backed by SQLite.")
+    parser = argparse.ArgumentParser(description="money_tracker helper backed by SQLite.")
     parser.add_argument("--db", help="Custom SQLite database path")
     subparsers = parser.add_subparsers(dest="command", required=True)
 

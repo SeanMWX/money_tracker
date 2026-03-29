@@ -1,16 +1,17 @@
-# Local Bookkeeping Commands
+# money_tracker Commands
 
 ## Runtime
 
 - Python: `3.9+`
 - Dependencies: Python standard library only
-- Default database path: `~/.local-bookkeeping/bookkeeping.db`
+- Default database path: `~/.money_tracker/bookkeeping.db`
 - Runtime script: `{baseDir}/scripts/bookkeeping.py`
 - Override order:
   1. `--db <path>`
-  2. `LOCAL_BOOKKEEPING_DB`
-  3. default home-directory path
-- For extra prompt examples, see `{baseDir}/references/chat-reference.md`
+  2. `MONEY_TRACKER_DB`
+  3. `LOCAL_BOOKKEEPING_DB` (legacy compatibility)
+  4. default home-directory path
+- For extra prompt examples, see `{baseDir}/references/chat_reference.md`
 
 ## Command Summary
 
